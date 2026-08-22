@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "holoskill-gym"
+version = "0.1.0"
+description = "SEAGym x SkillOpt x Holo: self-evolving skills for CLI coding agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ElenaViewSynthesis" }]
+
+dependencies = [
+    "openai>=1.40",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+holo-preflight = "holoskill_gym.preflight:main"
+
+[tool.setuptools]
+packages = ["holoskill_gym"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
