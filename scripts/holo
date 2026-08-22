@@ -1,0 +1,268 @@
+#!/usr/bin/env bash
+# holo - talk to H Company Holo models from the terminal.
+#
+# Requires: curl, jq. Reads HAI_API_KEY from the environment or from the
+# repository .env file. The key is never printed.
+
+set -uo pipefail
+
+BASE_URL_DEFAULT="https://api.hcompany.ai/v1/"
+MODEL_SMALL="holo3-1-35b-a3b"
+MODEL_LARGE="holo3-122b-a10b"
+
+model="$MODEL_SMALL"
+system=""
+temperature=""
+max_tokens=""
+interactive=0
+stream=0
+raw_json=0
+verbose=0
+
+prog="${0##*/}"
+
+usage() {
+  cat <<HELPTEXT
+$prog - simple conversations with Holo models
+
+USAGE
+  $prog [options] "your prompt"
+  echo "your prompt" | $prog [options]
+  $prog -i [options]                 # multi-turn chat
+
+OPTIONS
+  -m, --model NAME     Model or alias (default: 35b)
+  -s, --system TEXT    System prompt
+  -t, --temp N         Temperature, e.g. 0.7
+  -n, --max-tokens N   Cap the completion length
+  -i, --interactive    Multi-turn conversation; /exit to quit, /reset to clear
+  -S, --stream         Print tokens as they arrive
+  -j, --json           Print the raw JSON response
+  -v, --verbose        Report model, latency and token usage on stderr
+  -l, --list           List model aliases
+  -h, --help           Show this help
+
+ALIASES
+  35b, small, fast        -> $MODEL_SMALL
+  122b, large, optimizer  -> $MODEL_LARGE
+  (any other value is sent through unchanged)
+
+EXAMPLES
+  $prog "explain prefix caching in one paragraph"
+  $prog -m 122b -S "draft a bounded skill edit for a slow tokenizer path"
+  $prog -i -s "You are a terse code reviewer."
+  git diff | $prog -m 122b "review this diff"
+HELPTEXT
+}
+
+die() { printf '%s: %s\n' "$prog" "$1" >&2; exit "${2:-1}"; }
+
+resolve_model() {
+  case "$1" in
+    35b|small|fast|holo31) printf '%s' "$MODEL_SMALL" ;;
+    122b|large|big|optimizer|holo3) printf '%s' "$MODEL_LARGE" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+load_key() {
+  local key="${HAI_API_KEY:-}"
+  local here env_file
+  if [ -z "$key" ]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for env_file in "$here/../.env" "$PWD/.env"; do
+      [ -f "$env_file" ] || continue
+      key="$(grep -E '^[[:space:]]*HAI_API_KEY[[:space:]]*=' "$env_file" | tail -1 | cut -d= -f2-)"
+      key="$(printf '%s' "$key" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
+      [ -n "$key" ] && break
+    done
+  fi
+  [ -n "$key" ] || die "HAI_API_KEY is not set (export it, or add it to .env)" 4
+  [ "$key" != "your-api-key-here" ] || die "HAI_API_KEY is still the placeholder value" 4
+  printf '%s' "$key"
+}
+
+explain_status() {
+  case "$1" in
+    400) printf 'bad request - check model name and parameters' ;;
+    401|403) printf 'authentication rejected - check HAI_API_KEY' ;;
+    402) printf 'insufficient credit - this model needs a paid tier (portal.hcompany.ai)' ;;
+    404) printf 'model not found or not enabled for this key' ;;
+    408) printf 'request timed out (retryable)' ;;
+    429) printf 'rate limited (retryable)' ;;
+    500|502|503|504) printf 'provider error (retryable)' ;;
+    000) printf 'could not reach the API - check network or base URL' ;;
+    *) printf 'unexpected status' ;;
+  esac
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -m|--model) [ $# -ge 2 ] || die "--model needs a value"; model="$(resolve_model "$2")"; shift 2 ;;
+    -s|--system) [ $# -ge 2 ] || die "--system needs a value"; system="$2"; shift 2 ;;
+    -t|--temp|--temperature) [ $# -ge 2 ] || die "--temp needs a value"; temperature="$2"; shift 2 ;;
+    -n|--max-tokens) [ $# -ge 2 ] || die "--max-tokens needs a value"; max_tokens="$2"; shift 2 ;;
+    -i|--interactive) interactive=1; shift ;;
+    -S|--stream) stream=1; shift ;;
+    -j|--json) raw_json=1; shift ;;
+    -v|--verbose) verbose=1; shift ;;
+    -l|--list)
+      printf '%-24s %s\n' "$MODEL_SMALL" "aliases: 35b, small, fast   (default)"
+      printf '%-24s %s\n' "$MODEL_LARGE" "aliases: 122b, large, optimizer"
+      exit 0 ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) die "unknown option: $1 (try --help)" 2 ;;
+    *) break ;;
+  esac
+done
+
+command -v curl >/dev/null 2>&1 || die "curl is required" 3
+command -v jq   >/dev/null 2>&1 || die "jq is required" 3
+
+BASE_URL="${HOLO_BASE_URL:-$BASE_URL_DEFAULT}"
+ENDPOINT="${BASE_URL%/}/chat/completions"
+API_KEY="$(load_key)" || exit $?
+
+# Conversation history as a JSON array.
+messages='[]'
+if [ -n "$system" ]; then
+  messages="$(jq -n --arg s "$system" '[{role:"system",content:$s}]')"
+fi
+
+build_body() {
+  local msgs="$1" want_stream="$2" body
+  body="$(jq -n --arg m "$model" --argjson msgs "$msgs" --argjson st "$want_stream" \
+            '{model:$m, messages:$msgs, stream:($st==1)}')"
+  [ -n "$temperature" ] && body="$(jq --argjson t "$temperature" '.temperature=$t' <<<"$body")"
+  [ -n "$max_tokens" ]  && body="$(jq --argjson n "$max_tokens" '.max_tokens=$n' <<<"$body")"
+  printf '%s' "$body"
+}
+
+now_ms() { date +%s%3N 2>/dev/null || printf '0'; }
+
+# Sends one request. Echoes the assistant text on stdout; diagnostics to stderr.
+send() {
+  local msgs="$1" body started elapsed reply line chunk
+  started="$(now_ms)"
+
+  if [ "$stream" -eq 1 ] && [ "$raw_json" -eq 0 ]; then
+    body="$(build_body "$msgs" 1)"
+    reply=""
+    while IFS= read -r line; do
+      line="${line%$'\r'}"
+      case "$line" in
+        "data: [DONE]") break ;;
+        "data: "*) ;;
+        *) continue ;;
+      esac
+      chunk="$(jq -rj '.choices[0].delta.content // empty' <<<"${line#data: }" 2>/dev/null)" || continue
+      [ -n "$chunk" ] || continue
+      printf '%s' "$chunk" >&2
+      reply="$reply$chunk"
+    done < <(curl -sN -X POST "$ENDPOINT" \
+                  -H "Authorization: Bearer $API_KEY" \
+                  -H "Content-Type: application/json" \
+                  --data-binary "$body")
+    printf '\n' >&2
+    if [ -z "$reply" ]; then
+      printf '%s: empty stream - retry without -S to see the error status\n' "$prog" >&2
+      return 9
+    fi
+    printf '%s' "$reply"
+    return 0
+  fi
+
+  body="$(build_body "$msgs" 0)"
+  local response http_code payload
+  response="$(curl -s -w $'\n%{http_code}' -X POST "$ENDPOINT" \
+                   -H "Authorization: Bearer $API_KEY" \
+                   -H "Content-Type: application/json" \
+                   --data-binary "$body")"
+  http_code="${response##*$'\n'}"
+  payload="${response%$'\n'*}"
+  elapsed=$(( $(now_ms) - started ))
+
+  if [ "$http_code" != "200" ]; then
+    printf '%s: HTTP %s - %s\n' "$prog" "$http_code" "$(explain_status "$http_code")" >&2
+    jq -r '.error.message // .message // empty' <<<"$payload" >&2 2>/dev/null
+    return 9
+  fi
+
+  if [ "$raw_json" -eq 1 ]; then
+    jq . <<<"$payload"
+    return 0
+  fi
+
+  if [ "$verbose" -eq 1 ]; then
+    jq -r --arg ms "$elapsed" \
+      '"[" + .model + "  " + $ms + "ms  tokens: " + ((.usage.prompt_tokens // 0)|tostring)
+       + "+" + ((.usage.completion_tokens // 0)|tostring)
+       + "=" + ((.usage.total_tokens // 0)|tostring) + "]"' <<<"$payload" >&2
+  fi
+  local finish content
+  finish="$(jq -r '.choices[0].finish_reason // empty' <<<"$payload" 2>/dev/null)"
+  content="$(jq -r '.choices[0].message.content // empty' <<<"$payload" 2>/dev/null)"
+
+  if [ -z "$content" ]; then
+    if [ "$finish" = "length" ]; then
+      printf '%s: response truncated before any text (finish_reason=length).' "$prog" >&2
+      printf ' Raise -n/--max-tokens or drop the flag.\n' >&2
+    else
+      printf '%s: model returned empty content (finish_reason=%s)\n' "$prog" "${finish:-unknown}" >&2
+    fi
+    return 10
+  fi
+
+  printf '%s' "$content"
+}
+
+if [ "$interactive" -eq 1 ]; then
+  printf 'holo interactive - model: %s\n' "$model" >&2
+  printf 'Type /exit to quit, /reset to clear history, /model NAME to switch.\n\n' >&2
+  while true; do
+    printf '> ' >&2
+    IFS= read -r line || { printf '\n' >&2; break; }
+    case "$line" in
+      "") continue ;;
+      /exit|/quit|/q) break ;;
+      /reset)
+        messages='[]'
+        [ -n "$system" ] && messages="$(jq -n --arg s "$system" '[{role:"system",content:$s}]')"
+        printf 'history cleared\n\n' >&2; continue ;;
+      "/model "*)
+        model="$(resolve_model "${line#/model }")"
+        printf 'model: %s\n\n' "$model" >&2; continue ;;
+      /help) usage >&2; continue ;;
+    esac
+    messages="$(jq --arg c "$line" '. + [{role:"user",content:$c}]' <<<"$messages")"
+    if ! reply="$(send "$messages")"; then
+      messages="$(jq 'del(.[-1])' <<<"$messages")"
+      continue
+    fi
+    [ "$stream" -eq 1 ] || printf '%s\n' "$reply"
+    printf '\n'
+    messages="$(jq --arg c "$reply" '. + [{role:"assistant",content:$c}]' <<<"$messages")"
+  done
+  exit 0
+fi
+
+# One-shot: prompt from arguments, and/or piped stdin.
+prompt="$*"
+if [ ! -t 0 ]; then
+  piped="$(cat)"
+  if [ -n "$piped" ]; then
+    if [ -n "$prompt" ]; then
+      prompt="$prompt"$'\n\n'"$piped"
+    else
+      prompt="$piped"
+    fi
+  fi
+fi
+[ -n "$prompt" ] || { usage >&2; exit 2; }
+
+messages="$(jq --arg c "$prompt" '. + [{role:"user",content:$c}]' <<<"$messages")"
+reply="$(send "$messages")" || exit $?
+if [ "$stream" -eq 0 ] || [ "$raw_json" -eq 1 ]; then
+  printf '%s\n' "$reply"
+fi
