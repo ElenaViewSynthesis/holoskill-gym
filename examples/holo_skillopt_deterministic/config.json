@@ -1,0 +1,83 @@
+{
+  "experiment_id": "holo_skillopt_deterministic",
+  "description": "Credential-free end-to-end SkillOpt/Holo control-flow smoke.",
+  "seed": 42,
+  "task_dataset": {
+    "path": "tasks/task_index.json",
+    "version": "holo-skillopt-smoke-v1"
+  },
+  "split_manifest": {
+    "path": "splits/split.json",
+    "split_id": "holo_skillopt_smoke_seed42"
+  },
+  "schedule": {
+    "train_size": 2,
+    "val_size": 1,
+    "test_size": 1,
+    "batch_size": 1,
+    "num_epochs": 1,
+    "num_updates_per_batch": 1
+  },
+  "dataloader": {
+    "shuffle_train": false,
+    "drop_last": false
+  },
+  "backend": {
+    "name": "deterministic"
+  },
+  "baseline": {
+    "name": "skillopt_holo",
+    "class_path": "holoskill_gym.baseline:SkillOptHoloBaseline",
+    "config": {
+      "initial_skill_path": "skills/initial_skill.md",
+      "skillopt_gate_path": "tasks/skillopt_gate.json",
+      "split_manifest_path": "splits/split.json",
+      "optimizer_backend": "deterministic_fake",
+      "gate_evaluator_path": "holoskill_gym.fakes:deterministic_gate",
+      "gate_mode": "on",
+      "gate_metric": "soft",
+      "gate_no_regression": true,
+      "target_executor": "codex_exec"
+    }
+  },
+  "rollout_agent": {
+    "name": "deterministic-codeopt",
+    "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
+    "config": {
+      "executor": "codex_exec"
+    },
+    "models": {}
+  },
+  "evaluation_strategy": {
+    "update_validation": {
+      "source_split": "val",
+      "selection": "fixed_subset",
+      "val_size": 1
+    },
+    "replay": {
+      "enabled": true,
+      "frequency": 1,
+      "source": "seen_train_tasks",
+      "selection": "fixed_subset",
+      "replay_size": 1
+    },
+    "final_test_views": [
+      {
+        "name": "id_test",
+        "source_split": "test"
+      }
+    ]
+  },
+  "metrics": {
+    "primary": [
+      "success_rate",
+      "mean_score",
+      "update_validation_gain",
+      "final_gain",
+      "forgetting_rate"
+    ]
+  },
+  "output": {
+    "run_dir": "../../results/runs/holo_skillopt_deterministic"
+  }
+}

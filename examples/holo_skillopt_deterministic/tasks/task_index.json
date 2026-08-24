@@ -1,0 +1,33 @@
+{
+  "version": "holo-skillopt-smoke-v1",
+  "tasks": [
+    {
+      "task_id": "prefix-cache-train-1",
+      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "train-1"},
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "easy"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
+      "fixtures": {"scores": {"default": 1.0}, "tokens": 100}
+    },
+    {
+      "task_id": "batching-train-2",
+      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "train-2"},
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "easy"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
+      "fixtures": {"scores": {"default": 0.0}, "tokens": 110}
+    },
+    {
+      "task_id": "serialization-val-1",
+      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "val-1"},
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "medium"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
+      "fixtures": {"scores": {"default": 1.0}, "tokens": 120}
+    },
+    {
+      "task_id": "locking-test-1",
+      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "test-1"},
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "hard"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
+      "fixtures": {"scores": {"default": 1.0}, "tokens": 130}
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "split_id": "holo_skillopt_smoke_seed42",
+  "split_version": "v1",
+  "seed": 42,
+  "task_pool": {"version": "holo-skillopt-smoke-v1", "domains": ["code"]},
+  "splits": {
+    "train": ["prefix-cache-train-1", "batching-train-2"],
+    "val": ["serialization-val-1"],
+    "test": ["locking-test-1"]
+  }
+}
