@@ -1,0 +1,6 @@
+[submodule "reference/seagym"]
+	path = reference/seagym
+	url = https://github.com/antropy-research/SEAGym.git
+[submodule "reference/skillopt"]
+	path = reference/skillopt
+	url = https://github.com/microsoft/SkillOpt.git
