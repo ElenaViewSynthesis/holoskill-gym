@@ -28,6 +28,45 @@ update.
 git submodule update --init --recursive
 ```
 
+The nested `reference/ace/kayba-ai/ace-eval` submodule is private or removed
+upstream. Its initialization failure is expected and does not affect this
+SkillOpt/Holo integration.
+
+## Python environment
+
+Use a project venv. It keeps the editable reference checkouts and their pinned
+dependencies isolated from the system interpreter. This repository already has
+a Windows-style `.venv`, so WSL/Linux development uses `.venv-linux` without
+overwriting it:
+
+```bash
+uv venv --python 3.12 .venv-linux
+source .venv-linux/bin/activate
+UV_CACHE_DIR=/tmp/cua-holo-uv-cache uv pip install \
+  -e '.[dev]' \
+  -e 'reference/skillopt[dev]' \
+  -e 'reference/seagym[models]' \
+  -e reference/seagym/reference/harbor
+```
+
+That installs `python-dotenv`, pytest, Ruff, SkillOpt, SEAGym, and Harbor into
+one active interpreter. The three reference packages remain editable. A normal
+`uv sync --extra dev` also understands these local sources through
+`[tool.uv.sources]`.
+
+Run the offline end-to-end smoke:
+
+```bash
+.venv-linux/bin/seagym inspect config examples/holo_skillopt_deterministic/config.json
+.venv-linux/bin/seagym train examples/holo_skillopt_deterministic/config.json
+```
+
+The smoke never uses credentials or external agents. Production target
+rollouts map `codex_exec` to Harbor's built-in Codex agent (configured with
+`gpt-5.6-sol`) and `claude_code_exec` to Harbor's built-in Claude Code agent.
+Holo remains the optimizer role; target and optimizer usage are recorded
+separately.
+
 ## Computer-use agent models
 
 The H Models API serves two vision-language models built for GUI agents and
