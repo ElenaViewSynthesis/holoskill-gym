@@ -7,14 +7,17 @@ name = "holoskill-gym"
 version = "0.1.0"
 description = "SEAGym x SkillOpt x Holo: self-evolving skills for CLI coding agents"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "ElenaViewSynthesis" }]
 
 dependencies = [
+    "harbor",
     "openai>=1.40",
     "pydantic>=2.7",
     "python-dotenv>=1.0",
+    "seagym[models]",
+    "skillopt==0.2.0",
 ]
 
 [project.optional-dependencies]
@@ -29,9 +32,14 @@ holo-preflight = "holoskill_gym.preflight:main"
 [tool.setuptools]
 packages = ["holoskill_gym"]
 
+[tool.uv.sources]
+harbor = { path = "reference/seagym/reference/harbor", editable = true }
+seagym = { path = "reference/seagym", editable = true }
+skillopt = { path = "reference/skillopt", editable = true }
+
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
