@@ -22,7 +22,10 @@ from dotenv import load_dotenv
 
 DEFAULT_BASE_URL = "https://api.hcompany.ai/v1/"
 DEFAULT_MODEL = "holo3-1-35b-a3b"
-OPTIMIZER_MODEL = "holo3-122b-a10b"
+PAID_TIER_MODEL = "holo3-122b-a10b"
+# The optimizer defaults to the free tier: PAID_TIER_MODEL answers HTTP 402
+# (insufficient_credit) until credits are added to the account.
+DEFAULT_OPTIMIZER_MODEL = "holo3-1-35b-a3b"
 PROMPT = "In one sentence, what is a computer-use agent?"
 
 
@@ -53,24 +56,30 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One-shot H Models API preflight.")
     parser.add_argument("--model", default=os.environ.get("HOLO_PREFLIGHT_MODEL", DEFAULT_MODEL))
     parser.add_argument("--optimizer", action="store_true",
-                        help=f"Use {OPTIMIZER_MODEL} instead of the default small model.")
+                        help="Use the configured HOLO_OPTIMIZER_MODEL.")
     parser.add_argument("--prompt", default=PROMPT)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--env-file", default=".env")
     args = parser.parse_args(argv)
 
-    model = OPTIMIZER_MODEL if args.optimizer else args.model
-    base_url = os.environ.get("HOLO_BASE_URL", DEFAULT_BASE_URL)
-
+    # Load .env first so that HOLO_* settings from the file are visible below.
     env_path = Path(args.env_file).resolve()
     key = load_key(env_path)
-    base_url = os.environ.get("HOLO_BASE_URL", base_url)
+
+    base_url = os.environ.get("HOLO_BASE_URL", DEFAULT_BASE_URL)
+    optimizer_model = os.environ.get("HOLO_OPTIMIZER_MODEL", DEFAULT_OPTIMIZER_MODEL)
+    model = optimizer_model if args.optimizer else args.model
 
     # Import late so that a missing dependency is reported clearly.
     try:
         from openai import (
-            APIConnectionError, APIStatusError, APITimeoutError,
-            AuthenticationError, NotFoundError, OpenAI, RateLimitError,
+            APIConnectionError,
+            APIStatusError,
+            APITimeoutError,
+            AuthenticationError,
+            NotFoundError,
+            OpenAI,
+            RateLimitError,
         )
     except ImportError as exc:  # pragma: no cover - environment problem
         print(f"FAIL  openai package not importable: {exc}", file=sys.stderr)
