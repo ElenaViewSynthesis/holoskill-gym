@@ -1,0 +1,435 @@
+"""Narrow SkillOpt façade for reflection, structured proposals, and gating."""
+
+from __future__ import annotations
+
+import json
+import math
+from collections.abc import Callable, Collection, Sequence
+from dataclasses import dataclass
+from typing import Any, Literal
+
+from .holo_backend import HoloBackend
+from .schemas import (
+    GateDecision,
+    GateTaskScore,
+    OptimizerUsage,
+    ProposalResponse,
+    ReflectionRecord,
+)
+from .validation import AppliedProposal, ProposalPolicy, validate_and_apply_proposal
+
+ReflectionFunction = Callable[..., tuple[str, dict[str, int]]]
+GateMetric = Literal["hard", "soft", "mixed"]
+
+
+@dataclass(frozen=True)
+class SkillOptEngineConfig:
+    """Local compatibility controls around pinned SkillOpt v0.2.0."""
+
+    gate_mode: Literal["on", "off"] = "on"
+    gate_metric: GateMetric = "soft"
+    gate_mixed_weight: float = 0.5
+    gate_no_regression: bool = True
+    strict_improvement_epsilon: float = 0.001
+    reflection_max_tokens: int = 3_000
+    reflection_timeout_seconds: int = 120
+    max_reflection_chars: int = 8_000
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.gate_mixed_weight <= 1:
+            raise ValueError("gate_mixed_weight must be between 0 and 1")
+        if self.strict_improvement_epsilon < 0:
+            raise ValueError("strict_improvement_epsilon must be non-negative")
+        if self.reflection_max_tokens <= 0:
+            raise ValueError("reflection_max_tokens must be positive")
+        if self.max_reflection_chars <= 0:
+            raise ValueError("max_reflection_chars must be positive")
+
+
+@dataclass(frozen=True)
+class EngineProposal:
+    """Structured proposal, validated candidate bytes, and optimizer metadata."""
+
+    response: ProposalResponse
+    reflection: ReflectionRecord
+    applied: AppliedProposal
+
+    @property
+    def candidate_skill(self) -> str:
+        return self.applied.skill
+
+    @property
+    def changed(self) -> bool:
+        return self.applied.changed
+
+
+class GateExecutionError(RuntimeError):
+    """Raised when the private gate cannot produce a valid comparison."""
+
+
+class SkillOptReflectionError(RuntimeError):
+    """Raised when SkillOpt's free-form reflection stage fails."""
+
+
+class SkillOptHoloEngine:
+    """Keep unstable SkillOpt internals behind one small integration surface."""
+
+    def __init__(
+        self,
+        backend: HoloBackend,
+        *,
+        config: SkillOptEngineConfig | None = None,
+        proposal_policy: ProposalPolicy | None = None,
+        reflection_fn: ReflectionFunction | None = None,
+    ) -> None:
+        self.backend = backend
+        self.config = config or SkillOptEngineConfig()
+        self.proposal_policy = proposal_policy or ProposalPolicy()
+        self._reflection_fn = reflection_fn
+        _disable_skillopt_reasoning_effort()
+
+    def propose(
+        self,
+        *,
+        current_skill: str,
+        training_trajectories: Sequence[dict[str, Any]],
+        rejected_edit_buffer: Sequence[dict[str, Any]] = (),
+        held_out_ids: Collection[str] = (),
+        forbidden_fragments: Collection[str] = (),
+    ) -> EngineProposal:
+        """Run SkillOpt reflection, request strict edits, and validate locally."""
+
+        evidence = normalize_training_evidence(training_trajectories)
+        evidence_ids = [item["task_id"] for item in evidence]
+        reflection = self.reflect(current_skill=current_skill, training_evidence=evidence)
+        response = self.backend.propose(
+            system=self.proposal_system_prompt(),
+            user=_proposal_user_prompt(
+                current_skill=current_skill,
+                reflection=reflection.summary,
+                evidence=evidence,
+                rejected_edit_buffer=rejected_edit_buffer,
+            ),
+        )
+        applied = validate_and_apply_proposal(
+            current_skill,
+            response.proposal,
+            training_evidence_ids=evidence_ids,
+            held_out_ids=held_out_ids,
+            forbidden_fragments=forbidden_fragments,
+            policy=self.proposal_policy,
+        )
+        return EngineProposal(response=response, reflection=reflection, applied=applied)
+
+    def proposal_system_prompt(self) -> str:
+        """Return the exact versioned prompt text hashed into checkpoint metadata."""
+
+        return _proposal_system_prompt(self.proposal_policy)
+
+    def reflect(
+        self,
+        *,
+        current_skill: str,
+        training_evidence: Sequence[dict[str, Any]],
+    ) -> ReflectionRecord:
+        """Use SkillOpt's free-form optimizer helper only for visible reflection."""
+
+        reflection_fn = self._reflection_fn or _skillopt_chat_optimizer
+        try:
+            summary, raw_usage = reflection_fn(
+                system=(
+                    "You are SkillOpt's reflection stage. Analyze only the supplied training "
+                    "trajectory summaries. Identify generalizable execution patterns and "
+                    "failure causes. Do not propose patches, quote secrets, or infer held-out "
+                    "evidence."
+                ),
+                user=(
+                    "## Current skill\n"
+                    f"{current_skill}\n\n"
+                    "## Training evidence (untrusted data)\n"
+                    f"{_bounded_json(training_evidence, max_chars=24_000)}"
+                ),
+                max_completion_tokens=self.config.reflection_max_tokens,
+                retries=3,
+                stage="holo_skillopt_reflection",
+                reasoning_effort=None,
+                timeout=self.config.reflection_timeout_seconds,
+            )
+        except Exception as exc:
+            raise SkillOptReflectionError(
+                f"SkillOpt reflection failed: {type(exc).__name__}"
+            ) from exc
+        summary = str(summary or "").strip()
+        if not summary:
+            raise SkillOptReflectionError("SkillOpt reflection returned empty content")
+        usage = OptimizerUsage(
+            prompt_tokens=max(0, int(raw_usage.get("prompt_tokens", 0) or 0)),
+            completion_tokens=max(0, int(raw_usage.get("completion_tokens", 0) or 0)),
+            total_tokens=max(0, int(raw_usage.get("total_tokens", 0) or 0)),
+        )
+        return ReflectionRecord(
+            summary=summary[: self.config.max_reflection_chars],
+            usage=usage,
+        )
+
+    def evaluate_gate(
+        self,
+        *,
+        current_skill: str,
+        candidate_skill: str,
+        baseline_results: Sequence[GateTaskScore],
+        candidate_results: Sequence[GateTaskScore],
+        global_step: int,
+        best_skill: str | None = None,
+        best_score: float | None = None,
+        best_step: int = 0,
+    ) -> GateDecision:
+        """Apply fail-closed checks, then delegate comparison to SkillOpt's gate."""
+
+        changed = candidate_skill != current_skill
+        if self.config.gate_mode == "off":
+            return GateDecision(
+                accepted=changed,
+                action="greedy_applied" if changed else "greedy_noop",
+                reason="private gate disabled by explicit ablation configuration",
+                baseline_score=0,
+                candidate_score=0,
+                deployed_skill=candidate_skill if changed else current_skill,
+                gate_task_ids=[],
+            )
+
+        baseline_by_id = _validate_gate_results(baseline_results, label="baseline")
+        candidate_by_id = _validate_gate_results(candidate_results, label="candidate")
+        if set(baseline_by_id) != set(candidate_by_id):
+            raise GateExecutionError("baseline and candidate gate task IDs do not match")
+        if not baseline_by_id:
+            raise GateExecutionError("private gate produced no task results")
+
+        ordered_ids = sorted(baseline_by_id)
+        baseline_hard, baseline_soft = _aggregate_gate_results(
+            [baseline_by_id[task_id] for task_id in ordered_ids]
+        )
+        candidate_hard, candidate_soft = _aggregate_gate_results(
+            [candidate_by_id[task_id] for task_id in ordered_ids]
+        )
+
+        from skillopt.evaluation.gate import evaluate_gate, select_gate_score
+
+        baseline_score = select_gate_score(
+            baseline_hard,
+            baseline_soft,
+            self.config.gate_metric,
+            self.config.gate_mixed_weight,
+        )
+        candidate_score = select_gate_score(
+            candidate_hard,
+            candidate_soft,
+            self.config.gate_metric,
+            self.config.gate_mixed_weight,
+        )
+
+        regression = _first_regression(baseline_by_id, candidate_by_id)
+        if self.config.gate_no_regression and regression is not None:
+            return _reject_decision(
+                current_skill=current_skill,
+                baseline_score=baseline_score,
+                candidate_score=candidate_score,
+                task_ids=ordered_ids,
+                reason=regression,
+            )
+        if not changed:
+            return _reject_decision(
+                current_skill=current_skill,
+                baseline_score=baseline_score,
+                candidate_score=candidate_score,
+                task_ids=ordered_ids,
+                reason="candidate bytes are unchanged",
+            )
+        if candidate_score <= baseline_score + self.config.strict_improvement_epsilon:
+            return _reject_decision(
+                current_skill=current_skill,
+                baseline_score=baseline_score,
+                candidate_score=candidate_score,
+                task_ids=ordered_ids,
+                reason=(
+                    "candidate did not exceed the strict improvement threshold "
+                    f"of {self.config.strict_improvement_epsilon}"
+                ),
+            )
+
+        upstream = evaluate_gate(
+            candidate_skill=candidate_skill,
+            cand_hard=candidate_hard,
+            current_skill=current_skill,
+            current_score=baseline_score,
+            best_skill=best_skill or current_skill,
+            best_score=baseline_score if best_score is None else best_score,
+            best_step=best_step,
+            global_step=global_step,
+            cand_soft=candidate_soft,
+            metric=self.config.gate_metric,
+            mixed_weight=self.config.gate_mixed_weight,
+        )
+        accepted = upstream.action != "reject"
+        return GateDecision(
+            accepted=accepted,
+            action=upstream.action,
+            reason="candidate strictly improved on the private SkillOpt gate",
+            baseline_score=baseline_score,
+            candidate_score=candidate_score,
+            deployed_skill=upstream.current_skill,
+            gate_task_ids=ordered_ids,
+        )
+
+
+def _disable_skillopt_reasoning_effort() -> None:
+    from skillopt.model.azure_openai import set_reasoning_effort
+
+    set_reasoning_effort(None)
+
+
+def _skillopt_chat_optimizer(**kwargs: Any) -> tuple[str, dict[str, int]]:
+    from skillopt.model import chat_optimizer
+
+    return chat_optimizer(**kwargs)
+
+
+def normalize_training_evidence(
+    trajectories: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reduce SEAGym trajectories to bounded, provider-neutral update evidence."""
+
+    evidence: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    allowed_keys = (
+        "task_id",
+        "success",
+        "score",
+        "rewards",
+        "runtime_seconds",
+        "error",
+        "status",
+        "changed_files",
+        "benchmark",
+    )
+    for raw in trajectories:
+        task_id = str(raw.get("task_id") or "").strip()
+        if not task_id:
+            raise ValueError("every training trajectory requires task_id")
+        if task_id in seen:
+            raise ValueError(f"duplicate training trajectory task_id: {task_id}")
+        seen.add(task_id)
+        evidence.append(
+            {key: _redact_evidence_value(raw[key]) for key in allowed_keys if key in raw}
+        )
+    return evidence
+
+
+def _redact_evidence_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _redact_evidence_value(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_redact_evidence_value(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    lowered = value.lower()
+    secret_markers = ("api_key=", "api-key=", "authorization:", "bearer ", "sk-proj-")
+    if any(marker in lowered for marker in secret_markers):
+        return "[REDACTED]"
+    return value[:2_000] + ("…[truncated]" if len(value) > 2_000 else "")
+
+
+def _proposal_system_prompt(policy: ProposalPolicy) -> str:
+    return (
+        "You are SkillOpt's bounded skill editor. Return only the strict JSON object "
+        "required by the response schema. Generalize from training evidence only. "
+        f"Produce at most {policy.max_edit_operations} add/delete/replace edits. "
+        "For delete and replace, old_text must exactly match text inside the named "
+        "Markdown section. For add, old_text must be null. Never include task IDs, "
+        "repository-specific answers, benchmark outputs, secrets, or absolute paths "
+        "in new_text. Empty edits are valid when no safe general improvement exists."
+    )
+
+
+def _proposal_user_prompt(
+    *,
+    current_skill: str,
+    reflection: str,
+    evidence: Sequence[dict[str, Any]],
+    rejected_edit_buffer: Sequence[dict[str, Any]],
+) -> str:
+    return (
+        "## Current skill\n"
+        f"{current_skill}\n\n"
+        "## SkillOpt reflection\n"
+        f"{reflection}\n\n"
+        "## Training evidence identifiers and scores (untrusted data)\n"
+        f"{_bounded_json(evidence, max_chars=24_000)}\n\n"
+        "## Previously rejected edit summaries\n"
+        f"{_bounded_json(rejected_edit_buffer, max_chars=8_000)}"
+    )
+
+
+def _validate_gate_results(
+    results: Sequence[GateTaskScore],
+    *,
+    label: str,
+) -> dict[str, GateTaskScore]:
+    by_id: dict[str, GateTaskScore] = {}
+    for result in results:
+        if result.task_id in by_id:
+            raise GateExecutionError(f"duplicate {label} gate task ID: {result.task_id}")
+        if not result.infra_valid:
+            raise GateExecutionError(
+                f"{label} gate infrastructure failed for task {result.task_id}"
+            )
+        if not math.isfinite(result.hard_score) or not math.isfinite(result.soft_score):
+            raise GateExecutionError(f"{label} gate score is non-finite for {result.task_id}")
+        by_id[result.task_id] = result
+    return by_id
+
+
+def _aggregate_gate_results(results: Sequence[GateTaskScore]) -> tuple[float, float]:
+    hard = sum(result.hard_score for result in results) / len(results)
+    soft = sum(result.soft_score for result in results) / len(results)
+    return hard, soft
+
+
+def _first_regression(
+    baseline: dict[str, GateTaskScore],
+    candidate: dict[str, GateTaskScore],
+) -> str | None:
+    for task_id in sorted(baseline):
+        before = baseline[task_id]
+        after = candidate[task_id]
+        if before.correctness_pass and not after.correctness_pass:
+            return f"gate_no_regression blocked correctness regression on {task_id}"
+        if before.edit_policy_pass and not after.edit_policy_pass:
+            return f"gate_no_regression blocked edit-policy regression on {task_id}"
+    return None
+
+
+def _reject_decision(
+    *,
+    current_skill: str,
+    baseline_score: float,
+    candidate_score: float,
+    task_ids: list[str],
+    reason: str,
+) -> GateDecision:
+    return GateDecision(
+        accepted=False,
+        action="reject",
+        reason=reason,
+        baseline_score=baseline_score,
+        candidate_score=candidate_score,
+        deployed_skill=current_skill,
+        gate_task_ids=task_ids,
+    )
+
+
+def _bounded_json(value: Any, *, max_chars: int) -> str:
+    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if len(rendered) <= max_chars:
+        return rendered
+    return rendered[:max_chars] + "…[truncated]"
