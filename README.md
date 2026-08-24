@@ -9,6 +9,14 @@ accepts or rejects them. SEAGym is the independent evaluator — it checkpoints
 each state and measures it, and never accepts, rejects, or rolls back an
 update.
 
+## Documentation
+
+| File | What it covers |
+|---|---|
+| [codebase-overview.md](codebase-overview.md) | How the vendored pieces connect, and the plain OpenAI client pointed at the H base URL |
+| [agents.md](agents.md) | Executor bindings: how SEAGym drives an agent it does not own, and how `HarborRolloutAgent` is subclassed |
+| [todo.md](todo.md) | Roadmap for further executors and their auth requirements |
+
 ## Vendored dependencies
 
 | Path | Upstream | Pinned at |
