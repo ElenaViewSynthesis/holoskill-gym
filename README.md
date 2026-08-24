@@ -1,6 +1,24 @@
 # holoskill-gym
 
-SEAGym x SkillOpt x Holo: self-evolving skills for CLI coding agents.
+Building **HoloSkill Gym**, a SEAGym × SkillOpt × Holo system for
+self-evolving CLI coding-agent skills.
+
+SkillOpt and Holo form the self-evolution method: Holo proposes bounded edits
+to a natural-language skill document, and SkillOpt's private held-out gate
+accepts or rejects them. SEAGym is the independent evaluator — it checkpoints
+each state and measures it, and never accepts, rejects, or rolls back an
+update.
+
+## Vendored dependencies
+
+| Path | Upstream | Pinned at |
+|---|---|---|
+| `reference/seagym` | [antropy-research/SEAGym](https://github.com/antropy-research/SEAGym) | `9e61e14` (main) |
+| `reference/skillopt` | [microsoft/SkillOpt](https://github.com/microsoft/SkillOpt) | `v0.2.0` (`e4ea6a6`) |
+
+```bash
+git submodule update --init --recursive
+```
 
 ## Computer-use agent models
 
