@@ -9,6 +9,9 @@ set -uo pipefail
 BASE_URL_DEFAULT="https://api.hcompany.ai/v1/"
 MODEL_SMALL="holo3-1-35b-a3b"
 MODEL_LARGE="holo3-122b-a10b"
+# Holo models spend completion tokens on a reasoning preamble before any
+# content appears, so a smaller ceiling truncates the answer to nothing.
+MIN_COMPLETION_TOKENS=256
 
 prog="${0##*/}"
 
@@ -71,8 +74,9 @@ ALIASES
   (any other value is sent through unchanged)
 
 NOTE
-  Holo models emit a reasoning preamble that counts against -n/--max-tokens.
-  Budget at least ~256 tokens or the answer may be cut off before it starts.
+  Holo models emit a reasoning preamble that counts against -n/--max-tokens,
+  so values below 256 are raised to 256 to keep the answer from being
+  truncated to nothing.
 
 EXAMPLES
   $prog "explain prefix caching in one paragraph"
@@ -123,9 +127,10 @@ while [ $# -gt 0 ]; do
     -n|--max-tokens)
       [ $# -ge 2 ] || die "--max-tokens needs a value"
       max_tokens="$2"
-      if [ "$max_tokens" -lt 256 ] 2>/dev/null; then
-        printf '%s: warning: -n %s may be too small; the reasoning preamble alone often uses ~256\n' \
-          "$prog" "$max_tokens" >&2
+      if [ "$max_tokens" -lt "$MIN_COMPLETION_TOKENS" ] 2>/dev/null; then
+        printf '%s: raising -n %s to %s so the reasoning preamble cannot consume the whole budget\n' \
+          "$prog" "$max_tokens" "$MIN_COMPLETION_TOKENS" >&2
+        max_tokens="$MIN_COMPLETION_TOKENS"
       fi
       shift 2 ;;
     -i|--interactive) interactive=1; shift ;;
