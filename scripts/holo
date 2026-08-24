@@ -10,6 +10,29 @@ BASE_URL_DEFAULT="https://api.hcompany.ai/v1/"
 MODEL_SMALL="holo3-1-35b-a3b"
 MODEL_LARGE="holo3-122b-a10b"
 
+prog="${0##*/}"
+
+# Reads VAR from the environment, falling back to the repository .env.
+env_get() {
+  local var="$1" val here env_file
+  val="$(printenv "$var" 2>/dev/null || true)"
+  if [ -z "$val" ]; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for env_file in "$here/../.env" "$PWD/.env"; do
+      [ -f "$env_file" ] || continue
+      val="$(grep -E "^[[:space:]]*${var}[[:space:]]*=" "$env_file" | tail -1 | cut -d= -f2-)"
+      val="$(printf '%s' "$val" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
+      [ -n "$val" ] && break
+    done
+  fi
+  printf '%s' "$val"
+}
+
+# The optimizer alias follows HOLO_OPTIMIZER_MODEL and defaults to the free
+# tier, because holo3-122b-a10b answers HTTP 402 without paid credits.
+MODEL_OPTIMIZER="$(env_get HOLO_OPTIMIZER_MODEL)"
+[ -n "$MODEL_OPTIMIZER" ] || MODEL_OPTIMIZER="$MODEL_SMALL"
+
 model="$MODEL_SMALL"
 system=""
 temperature=""
@@ -18,8 +41,6 @@ interactive=0
 stream=0
 raw_json=0
 verbose=0
-
-prog="${0##*/}"
 
 usage() {
   cat <<HELPTEXT
@@ -44,14 +65,20 @@ OPTIONS
 
 ALIASES
   35b, small, fast        -> $MODEL_SMALL
-  122b, large, optimizer  -> $MODEL_LARGE
+  122b, large, big        -> $MODEL_LARGE   (paid tier; 402 without credits)
+  opt, optimizer          -> $MODEL_OPTIMIZER
+                             (follows HOLO_OPTIMIZER_MODEL in .env)
   (any other value is sent through unchanged)
+
+NOTE
+  Holo models emit a reasoning preamble that counts against -n/--max-tokens.
+  Budget at least ~256 tokens or the answer may be cut off before it starts.
 
 EXAMPLES
   $prog "explain prefix caching in one paragraph"
-  $prog -m 122b -S "draft a bounded skill edit for a slow tokenizer path"
+  $prog -m opt -S "draft a bounded skill edit for a slow tokenizer path"
   $prog -i -s "You are a terse code reviewer."
-  git diff | $prog -m 122b "review this diff"
+  git diff | $prog -m opt "review this diff"
 HELPTEXT
 }
 
@@ -60,23 +87,15 @@ die() { printf '%s: %s\n' "$prog" "$1" >&2; exit "${2:-1}"; }
 resolve_model() {
   case "$1" in
     35b|small|fast|holo31) printf '%s' "$MODEL_SMALL" ;;
-    122b|large|big|optimizer|holo3) printf '%s' "$MODEL_LARGE" ;;
+    122b|large|big|holo3) printf '%s' "$MODEL_LARGE" ;;
+    opt|optimizer) printf '%s' "$MODEL_OPTIMIZER" ;;
     *) printf '%s' "$1" ;;
   esac
 }
 
 load_key() {
-  local key="${HAI_API_KEY:-}"
-  local here env_file
-  if [ -z "$key" ]; then
-    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    for env_file in "$here/../.env" "$PWD/.env"; do
-      [ -f "$env_file" ] || continue
-      key="$(grep -E '^[[:space:]]*HAI_API_KEY[[:space:]]*=' "$env_file" | tail -1 | cut -d= -f2-)"
-      key="$(printf '%s' "$key" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//")"
-      [ -n "$key" ] && break
-    done
-  fi
+  local key
+  key="$(env_get HAI_API_KEY)"
   [ -n "$key" ] || die "HAI_API_KEY is not set (export it, or add it to .env)" 4
   [ "$key" != "your-api-key-here" ] || die "HAI_API_KEY is still the placeholder value" 4
   printf '%s' "$key"
@@ -101,14 +120,22 @@ while [ $# -gt 0 ]; do
     -m|--model) [ $# -ge 2 ] || die "--model needs a value"; model="$(resolve_model "$2")"; shift 2 ;;
     -s|--system) [ $# -ge 2 ] || die "--system needs a value"; system="$2"; shift 2 ;;
     -t|--temp|--temperature) [ $# -ge 2 ] || die "--temp needs a value"; temperature="$2"; shift 2 ;;
-    -n|--max-tokens) [ $# -ge 2 ] || die "--max-tokens needs a value"; max_tokens="$2"; shift 2 ;;
+    -n|--max-tokens)
+      [ $# -ge 2 ] || die "--max-tokens needs a value"
+      max_tokens="$2"
+      if [ "$max_tokens" -lt 256 ] 2>/dev/null; then
+        printf '%s: warning: -n %s may be too small; the reasoning preamble alone often uses ~256\n' \
+          "$prog" "$max_tokens" >&2
+      fi
+      shift 2 ;;
     -i|--interactive) interactive=1; shift ;;
     -S|--stream) stream=1; shift ;;
     -j|--json) raw_json=1; shift ;;
     -v|--verbose) verbose=1; shift ;;
     -l|--list)
       printf '%-24s %s\n' "$MODEL_SMALL" "aliases: 35b, small, fast   (default)"
-      printf '%-24s %s\n' "$MODEL_LARGE" "aliases: 122b, large, optimizer"
+      printf '%-24s %s\n' "$MODEL_LARGE" "aliases: 122b, large, big   (paid tier)"
+      printf '%-24s %s\n' "$MODEL_OPTIMIZER" "aliases: opt, optimizer   (HOLO_OPTIMIZER_MODEL)"
       exit 0 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
