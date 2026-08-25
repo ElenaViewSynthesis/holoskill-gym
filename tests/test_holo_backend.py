@@ -109,6 +109,11 @@ def test_propose_uses_strict_schema_without_tools_or_reasoning_effort() -> None:
     assert backend.records == (result.call,)
 
 
+def test_backend_rejects_non_35b_holo_models() -> None:
+    with pytest.raises(ValueError, match="35B-only"):
+        config(model="holo3-122b-a10b")
+
+
 def test_malformed_json_fails_safely() -> None:
     backend = HoloBackend(config(), client=FakeClient([response(content="not json")]))
 

@@ -22,7 +22,6 @@ from .schemas import (
 DEFAULT_HOLO_BASE_URL = "https://api.hcompany.ai/v1"
 DEFAULT_HOLO_MODEL = "holo3-1-35b-a3b"
 HOLO_35B_MAX_OUTPUT_TOKENS = 4_096
-HOLO_122B_MAX_OUTPUT_TOKENS = 32_768
 DEFAULT_PROPOSAL_MAX_TOKENS = 3_000
 
 
@@ -44,8 +43,10 @@ class HoloBackendConfig:
             raise ValueError("Holo api_key must not be empty")
         if not self.base_url.strip():
             raise ValueError("Holo base_url must not be empty")
-        if not self.model.strip():
-            raise ValueError("Holo model must not be empty")
+        if self.model != DEFAULT_HOLO_MODEL:
+            raise ValueError(
+                f"Holo model must be {DEFAULT_HOLO_MODEL!r}; this integration is 35B-only"
+            )
         if self.max_completion_tokens <= 0:
             raise ValueError("max_completion_tokens must be positive")
         if self.timeout_seconds <= 0:
@@ -184,7 +185,7 @@ class HoloBackend:
         """Request and parse one bounded update proposal."""
 
         started = self._clock()
-        max_tokens = min(self.config.max_completion_tokens, _model_output_limit(self.config.model))
+        max_tokens = min(self.config.max_completion_tokens, HOLO_35B_MAX_OUTPUT_TOKENS)
 
         for attempt in range(1, self.config.max_attempts + 1):
             try:
@@ -354,14 +355,6 @@ def _normalize_provider_error(
         retryable=retryable,
         **common,
     )
-
-
-def _model_output_limit(model: str) -> int:
-    if model.startswith("holo3-1-35b"):
-        return HOLO_35B_MAX_OUTPUT_TOKENS
-    if model.startswith("holo3-122b"):
-        return HOLO_122B_MAX_OUTPUT_TOKENS
-    return HOLO_35B_MAX_OUTPUT_TOKENS
 
 
 def _optional_string(value: Any) -> str | None:

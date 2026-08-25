@@ -7,7 +7,6 @@ and the API key is never printed.
 
 Usage:
     python -m holoskill_gym.preflight
-    python -m holoskill_gym.preflight --model holo3-122b-a10b
     python -m holoskill_gym.preflight --optimizer --structured
 """
 
@@ -23,9 +22,6 @@ from dotenv import load_dotenv
 
 DEFAULT_BASE_URL = "https://api.hcompany.ai/v1/"
 DEFAULT_MODEL = "holo3-1-35b-a3b"
-PAID_TIER_MODEL = "holo3-122b-a10b"
-# The optimizer defaults to the free tier: PAID_TIER_MODEL answers HTTP 402
-# (insufficient_credit) until credits are added to the account.
 DEFAULT_OPTIMIZER_MODEL = "holo3-1-35b-a3b"
 PROMPT = "In one sentence, what is a computer-use agent?"
 
@@ -44,7 +40,6 @@ def load_key(env_path: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="One-shot H Models API preflight.")
-    parser.add_argument("--model", default=os.environ.get("HOLO_PREFLIGHT_MODEL", DEFAULT_MODEL))
     parser.add_argument(
         "--optimizer", action="store_true", help="Use the configured HOLO_OPTIMIZER_MODEL."
     )
@@ -64,7 +59,13 @@ def main(argv: list[str] | None = None) -> int:
 
     base_url = os.environ.get("HOLO_BASE_URL", DEFAULT_BASE_URL)
     optimizer_model = os.environ.get("HOLO_OPTIMIZER_MODEL", DEFAULT_OPTIMIZER_MODEL)
-    model = optimizer_model if args.optimizer else args.model
+    model = optimizer_model if args.optimizer else DEFAULT_MODEL
+    if model != DEFAULT_MODEL:
+        print(
+            f"FAIL  this integration is 35B-only; configure model={DEFAULT_MODEL}",
+            file=sys.stderr,
+        )
+        return 2
 
     # Import late so that a missing dependency is reported clearly.
     try:
