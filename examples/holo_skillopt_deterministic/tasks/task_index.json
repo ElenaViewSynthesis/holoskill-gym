@@ -1,33 +1,121 @@
 {
-  "version": "holo-skillopt-smoke-v1",
+  "version": "holo-skillopt-codeopt-smoke-v2",
   "tasks": [
     {
-      "task_id": "prefix-cache-train-1",
-      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "train-1"},
-      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "easy"},
-      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
-      "fixtures": {"scores": {"default": 1.0}, "tokens": 100}
+      "task_id": "deduplicate-train-1",
+      "source": {
+        "type": "local_codeopt_fixture",
+        "dataset": "holoskill-codeopt",
+        "task_name": "minimize-comparisons"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "easy"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      },
+      "fixtures": {
+        "codeopt": {
+          "repository": "repositories/minimize_comparisons",
+          "solution": "solutions/minimize_comparisons_workload.py",
+          "solution_target": "src/workload.py",
+          "objective": "Reduce equality comparisons in deduplicate while preserving first-occurrence order.",
+          "benchmark_metric": "latency_comparison_units",
+          "optimization_direction": "minimize",
+          "timeout_seconds": 30
+        }
+      }
     },
     {
-      "task_id": "batching-train-2",
-      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "train-2"},
-      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "easy"},
-      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
-      "fixtures": {"scores": {"default": 0.0}, "tokens": 110}
+      "task_id": "membership-train-2",
+      "source": {
+        "type": "local_codeopt_fixture",
+        "dataset": "holoskill-codeopt",
+        "task_name": "maximize-throughput"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "easy"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      },
+      "fixtures": {
+        "codeopt": {
+          "repository": "repositories/maximize_throughput",
+          "solution": "solutions/maximize_throughput_workload.py",
+          "solution_target": "src/workload.py",
+          "objective": "Increase membership throughput in count_matches without changing results.",
+          "benchmark_metric": "throughput_units",
+          "optimization_direction": "maximize",
+          "timeout_seconds": 30
+        }
+      }
     },
     {
-      "task_id": "serialization-val-1",
-      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "val-1"},
-      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "medium"},
-      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
-      "fixtures": {"scores": {"default": 1.0}, "tokens": 120}
+      "task_id": "deduplicate-val-1",
+      "source": {
+        "type": "local_codeopt_fixture",
+        "dataset": "holoskill-codeopt",
+        "task_name": "minimize-comparisons"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      },
+      "fixtures": {
+        "codeopt": {
+          "repository": "repositories/minimize_comparisons",
+          "solution": "solutions/minimize_comparisons_workload.py",
+          "solution_target": "src/workload.py",
+          "objective": "Reduce equality comparisons in deduplicate while preserving first-occurrence order.",
+          "benchmark_metric": "latency_comparison_units",
+          "optimization_direction": "minimize",
+          "timeout_seconds": 30
+        }
+      }
     },
     {
-      "task_id": "locking-test-1",
-      "source": {"type": "fixture", "dataset": "holo-skillopt", "task_name": "test-1"},
-      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "hard"},
-      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"},
-      "fixtures": {"scores": {"default": 1.0}, "tokens": 130}
+      "task_id": "membership-test-1",
+      "source": {
+        "type": "local_codeopt_fixture",
+        "dataset": "holoskill-codeopt",
+        "task_name": "maximize-throughput"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "hard"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      },
+      "fixtures": {
+        "codeopt": {
+          "repository": "repositories/maximize_throughput",
+          "solution": "solutions/maximize_throughput_workload.py",
+          "solution_target": "src/workload.py",
+          "objective": "Increase membership throughput in count_matches without changing results.",
+          "benchmark_metric": "throughput_units",
+          "optimization_direction": "maximize",
+          "timeout_seconds": 30
+        }
+      }
     }
   ]
 }

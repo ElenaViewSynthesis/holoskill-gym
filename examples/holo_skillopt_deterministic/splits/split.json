@@ -1,11 +1,14 @@
 {
-  "split_id": "holo_skillopt_smoke_seed42",
-  "split_version": "v1",
+  "split_id": "holo_skillopt_codeopt_smoke_seed42",
+  "split_version": "v2",
   "seed": 42,
-  "task_pool": {"version": "holo-skillopt-smoke-v1", "domains": ["code"]},
+  "task_pool": {
+    "version": "holo-skillopt-codeopt-smoke-v2",
+    "domains": ["code"]
+  },
   "splits": {
-    "train": ["prefix-cache-train-1", "batching-train-2"],
-    "val": ["serialization-val-1"],
-    "test": ["locking-test-1"]
+    "train": ["deduplicate-train-1", "membership-train-2"],
+    "val": ["deduplicate-val-1"],
+    "test": ["membership-test-1"]
   }
 }

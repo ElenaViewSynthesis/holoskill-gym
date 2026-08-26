@@ -1,10 +1,10 @@
 {
   "experiment_id": "holo_skillopt_deterministic",
-  "description": "Credential-free end-to-end SkillOpt/Holo control-flow smoke.",
+  "description": "Credential-free end-to-end SkillOpt/Holo code-optimization verifier smoke.",
   "seed": 42,
   "task_dataset": {
     "path": "tasks/task_index.json",
-    "version": "holo-skillopt-smoke-v1"
+    "version": "holo-skillopt-codeopt-smoke-v2"
   },
   "split_manifest": {
     "path": "splits/split.json",
@@ -41,10 +41,12 @@
     }
   },
   "rollout_agent": {
-    "name": "deterministic-codeopt",
-    "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
+    "name": "deterministic-codeopt-fixture",
+    "class_path": "holoskill_gym.fakes:DeterministicCodeOptRolloutAgent",
     "config": {
-      "executor": "codex_exec"
+      "fake_agent_id": "deterministic-codeopt-fixture",
+      "model": "deterministic-fixture-model",
+      "fixture_root": "../../fixtures"
     },
     "models": {}
   },

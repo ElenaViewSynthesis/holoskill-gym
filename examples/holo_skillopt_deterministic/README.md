@@ -1,8 +1,14 @@
 # Deterministic SkillOpt/Holo smoke
 
-This fixture exercises SEAGym rollout, bounded SkillOpt/Holo proposal, the
-method-private gate, checkpointing, observer evaluation, and reporting without
-network access, API credentials, Harbor capacity, Codex, or Claude Code.
+This fixture executes the two checked-in code-optimization repositories through
+the production verifier. It exercises pinned baseline materialization,
+correctness tests, repeated benchmarks, edit-policy checks, normalized ATIF
+evidence, SEAGym rollout/reporting, bounded SkillOpt/Holo proposal, the
+method-private gate, checkpointing, and observer evaluation without network
+access, API credentials, Harbor capacity, Codex, or Claude Code.
+
+The rollout identity is explicitly `deterministic-codeopt-fixture` with model
+`deterministic-fixture-model`; reports must never label it as Codex or Claude.
 
 From the repository root:
 
