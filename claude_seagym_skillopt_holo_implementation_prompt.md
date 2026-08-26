@@ -4,10 +4,12 @@ You are the principal software engineer responsible for implementing a productio
 
 The system must evaluate reusable coding-agent skill evolution for **Codex CLI and Claude Code** on deterministic code-optimization tasks. **SkillOpt owns skill proposal, acceptance/rejection, and its private held-out validation gate. SEAGym remains a passive evaluation framework:** it records checkpointed states and evaluates them through train, frozen update-validation, replay, held-out ID/OOD, cost, and reliability views. SEAGym must never accept, reject, promote, or roll back an update.
 
-Use **H Company Holo3** as the priority model integration:
+Use **H Company Holo3** as the priority model integration. The optimizer policy
+below supersedes older 122B requirements in this prompt:
 
-- `holo3-122b-a10b` is the default SkillOpt optimizer/evolver. It analyzes scored trajectories and emits bounded structured edits to the skill document.
-- `holo3-1-35b-a3b` is an optional lower-cost optimizer and optional computer-use/visual supervisor. It is not required for the deterministic MVP.
+- `holo3-1-35b-a3b` is the sole SkillOpt optimizer/evolver supported by this integration. It analyzes scored trajectories and emits bounded structured edits to the skill document.
+- Skill-mutation calls use strict JSON-schema output with tools disabled, followed by mandatory local semantic validation. The model's tool capability may be used only in a separate, explicitly configured read-only evidence phase.
+- Other Holo models may remain available to general-purpose clients such as `scripts/holo`, but they are outside the reproducible SkillOpt mutation policy and must not be selected silently.
 - The target executor is either `codex_exec` or `claude_code_exec`. The executor model/harness is frozen during a run; only the natural-language skill artifact changes.
 - SkillOpt v0.2.0 is the compatibility target. The implementation may support a later pinned SkillOpt commit, but it must not silently depend on unpinned `main` behavior.
 
@@ -36,7 +38,7 @@ Build a minimal but extensible system called **HoloSkill Gym** with this lifecyc
 2. A `CodexCliRolloutAgent` or `ClaudeCodeRolloutAgent` checks out each repository at a pinned commit, installs the current skill, runs the CLI agent in an isolated environment, and captures a normalized trajectory.
 3. Deterministic verifiers run correctness tests, edit-policy checks, and benchmarks.
 4. SEAGym passes only the scored **training trajectories** to `SkillOptHoloBaseline.update()`.
-5. The baseline invokes SkillOpt’s reflection/aggregation/edit machinery. Holo3 122B is the optimizer model and must produce schema-constrained add/delete/replace edits.
+5. The baseline invokes SkillOpt’s reflection/aggregation/edit machinery. `holo3-1-35b-a3b` is the optimizer model and must produce schema-constrained add/delete/replace edits.
 6. SkillOpt evaluates the candidate on its own private `skillopt_gate` task set. It accepts the candidate only according to the configured SkillOpt gate policy.
 7. The baseline persists either the accepted skill or the unchanged prior skill and returns an auditable `UpdateResult`.
 8. SEAGym checkpoints that state and independently runs frozen update-validation, replay, held-out ID, held-out OOD, cost, and reliability evaluations.
@@ -266,7 +268,7 @@ A representative config should look like this, but adapt field names to the actu
       "gate_metric": "correctness_gated_performance",
       "gate_no_regression": true,
       "optimizer_backend": "holo_openai_compatible",
-      "optimizer_model": "holo3-122b-a10b",
+      "optimizer_model": "holo3-1-35b-a3b",
       "optimizer_base_url": "https://api.hcompany.ai/v1/",
       "max_edit_operations": 3,
       "max_skill_tokens": 2000,
@@ -301,7 +303,7 @@ Add these documented variables to `.env.example` without values:
 ```dotenv
 HAI_API_KEY=
 HOLO_BASE_URL=https://api.hcompany.ai/v1/
-HOLO_OPTIMIZER_MODEL=holo3-122b-a10b
+HOLO_OPTIMIZER_MODEL=holo3-1-35b-a3b
 CODEX_EXECUTABLE=codex
 CLAUDE_CODE_EXECUTABLE=claude
 ```
@@ -383,9 +385,9 @@ The backend must:
 
 - read `HAI_API_KEY` from the environment;
 - use the official `openai` Python client or the exact client already used by SkillOpt;
-- default to `holo3-122b-a10b` for optimizer calls;
-- use structured outputs, not native function calling, because the 122B model does not provide native function calling;
-- support `holo3-1-35b-a3b` through the same interface;
+- require `holo3-1-35b-a3b` for optimizer calls and reject other model IDs rather than silently changing model behavior;
+- clamp proposal output to the model's 4,096-token maximum;
+- use strict structured outputs with tools disabled for mutation calls, followed by local semantic validation; this is an auditability and reproducibility policy, not a workaround for missing tool support;
 - use bounded retry with exponential backoff only for retryable statuses;
 - surface authentication, model-access, rate-limit, malformed-output, timeout, and provider errors distinctly;
 - record token usage and latency where returned;
@@ -676,10 +678,9 @@ Recommended experiment matrix:
 |---|---|---|---|
 | Static control | Codex | none | static |
 | Static control | Claude Code | none | static |
-| Holo-SkillOpt | Codex | Holo3 122B | strict private gate |
-| Holo-SkillOpt | Claude Code | Holo3 122B | strict private gate |
-| Gate-off ablation | Codex | Holo3 122B | apply bounded edits |
-| Low-cost ablation | Codex | Holo3.1 35B | strict private gate |
+| Holo-SkillOpt | Codex | Holo3.1 35B | strict private gate |
+| Holo-SkillOpt | Claude Code | Holo3.1 35B | strict private gate |
+| Gate-off ablation | Codex | Holo3.1 35B | apply bounded edits |
 
 Reports must compare `A_0`, every update checkpoint, and final held-out results. Include:
 
@@ -785,7 +786,7 @@ Add a separate credentialed Holo preflight command that performs one minimal str
 ```bash
 python -m seagym.integrations.skillopt_holo.holo_backend \
   --preflight \
-  --model "${HOLO_OPTIMIZER_MODEL:-holo3-122b-a10b}"
+  --model "${HOLO_OPTIMIZER_MODEL:-holo3-1-35b-a3b}"
 ```
 
 Then document real-run commands, but do not execute them without credentials, installed CLIs, task data, and explicit operator intent:
@@ -857,7 +858,7 @@ The implementation is complete only when all of the following are true:
 
 1. SEAGym’s passive boundary is preserved and tested.
 2. SkillOpt is the actual bounded-edit/gating method, not a renamed custom optimizer.
-3. Holo3 122B works through a version-compatible structured-output backend.
+3. Holo3.1 35B works through a version-compatible strict structured-output backend, and unsupported optimizer model IDs fail closed.
 4. The deterministic smoke run requires no external services.
 5. Codex and Claude Code are selectable through one rollout-agent abstraction.
 6. SkillOpt gate tasks are disjoint from SEAGym validation/test/replay views.

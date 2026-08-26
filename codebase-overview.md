@@ -5,7 +5,7 @@ H Models API.
 
 ```text
 holoskill-gym/
-├── holoskill_gym/          our code (preflight today, backend next)
+├── holoskill_gym/          schemas, Holo backend, SkillOpt facade, baseline
 ├── scripts/holo            terminal client for Holo models
 ├── reference/seagym        antropy-research/SEAGym @ 9e61e14
 └── reference/skillopt      microsoft/SkillOpt @ v0.2.0 (e4ea6a6)
@@ -69,9 +69,10 @@ as an alias of `max_tokens` — the same ceiling under two names. It is enforced
 not merely tolerated: both names stop generation at exactly the requested count
 with `finish_reason: length`.
 
-The same path serves any OpenAI-compatible provider — point
-`optimizer_endpoint` at `https://api.deepseek.com/v1` with `DEEPSEEK_API_KEY`
-and nothing else changes.
+SkillOpt's upstream compatibility path can serve other OpenAI-compatible
+providers. The local `HoloBackendConfig` deliberately narrows the
+skill-mutation role to `holo3-1-35b-a3b`; it rejects other model IDs so a run
+cannot silently change capability or output limits.
 
 ### The gap: no structured output in v0.2.0
 
@@ -110,10 +111,10 @@ defaulting to 64000 (`engine/trainer.py:795`) and applied at
 { "model": { "rewrite_max_completion_tokens": 64000 } }
 ```
 
-Verified: H accepts 64000 with HTTP 200, so the default needs no change. The
-binding constraint is the model, not this key — `holo3-1-35b-a3b` caps output at
-4096, while `gpt-5.6-sol` allows 128000. For direct calls it is a plain
-argument: `chat_optimizer(system, user, max_completion_tokens=32000)`.
+Verified: H accepts 64000 with HTTP 200, but `holo3-1-35b-a3b` caps generated
+output at 4096. The local backend therefore clamps proposal requests to 4096
+instead of relying on provider-side clamping. `gpt-5.6-sol` is a separate
+target-rollout model and does not determine the Holo optimizer budget.
 
 ### Reasoning effort is per call, never global
 
@@ -122,9 +123,11 @@ by all four call paths, and `set_reasoning_effort()` is documented as applying
 "for all LLM calls". With the optimizer on Holo and the target on OpenAI, one
 global would be sent to both.
 
-Holo does not reject it — verified, HTTP 200 with `finish_reason: stop`, because
-vLLM ignores unknown fields. That makes it worse than an error: the value looks
-set while doing nothing.
+Holo 35B reasons, but its endpoint does not expose SkillOpt's
+`reasoning_effort` parameter as a supported control. It does not reject the
+unknown field — verified, HTTP 200 with `finish_reason: stop`, because vLLM
+ignores it. That makes forwarding the parameter worse than an error: the value
+looks set while doing nothing.
 
 Since `_chat_impl` resolves `reasoning_effort or REASONING_EFFORT`, the per-call
 argument wins. Leave the global unset and pass effort only where it applies:
@@ -143,26 +146,33 @@ same completion budget, so sizing `max_completion_tokens` is the only control.
 
 ### Two cautions
 
-- **Budget for the reasoning preamble.** Holo models emit reasoning tokens that
+- **Budget for the reasoning preamble.** Holo 35B emits reasoning tokens that
   count against the completion budget; structured-output calls returned
   `content: null` at 600 tokens and succeeded at 3000. `max_completion_tokens`
   is genuinely enforced (verified: a value of 20 stops generation at exactly 20
   tokens with `finish_reason: length`), so too small a value truncates before
-  any content appears. `chat_optimizer`'s 16384 default is accepted with HTTP
-  200 even though `holo3-1-35b-a3b` caps output at 4096 — the request is not
-  rejected; behaviour when generation would actually exceed 4096 is untested.
+  any content appears. Although `chat_optimizer`'s 16384 default is accepted,
+  the local structured backend clamps mutation requests to 4096 and the
+  reflection stage explicitly requests 3000.
 - **`_needs_responses_api(deployment)`** selects the Responses API for some
   model names. Confirm `holo3-*` does not match, or SkillOpt will call
   `client.responses.create()` against an endpoint that serves only chat
   completions.
 
-## Model access
+## Optimizer model policy
 
 | Model | Free tier | Tools | Max output |
 |---|---|---|---|
 | `holo3-1-35b-a3b` | yes, 10 req/min | yes | 4,096 |
-| `holo3-122b-a10b` | no — HTTP 402 `insufficient_credit` | no | 32,768 |
 
-`HOLO_OPTIMIZER_MODEL` defaults to the free-tier model for that reason. Listing
-is not access: both appear in `/v1/models` as active and ready, but only a real
-completion proves the key can use them.
+`HOLO_OPTIMIZER_MODEL` must be `holo3-1-35b-a3b`. The model supports reasoning
+and tools, but the mutation call uses strict `json_schema` followed by local
+semantic validation. Tool-assisted evidence gathering, if enabled later, is a
+separate read-only phase rather than an alternative patch format.
+
+This restriction is scoped to deterministic SkillOpt mutation. `scripts/holo`
+is a general-purpose terminal client, not an optimizer adapter, so it retains
+its `122b`/`large`/`big` aliases and sends explicitly selected model IDs through
+unchanged. Their availability and billing are provider/account concerns and do
+not affect a SkillOpt run. Listing a model is not proof of access; only a real
+completion is.
