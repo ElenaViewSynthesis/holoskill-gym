@@ -96,4 +96,5 @@ The remaining project work is normalization and verification: convert Harbor
 results and ATIF artifacts into bounded code-optimization evidence without
 duplicating Harbor's sandbox.
 
-Roadmap and per-executor auth requirements: [todo.md](todo.md).
+Implementation roadmap: [todo.md](todo.md). Per-executor auth requirements
+live in its deferred executor backlog.

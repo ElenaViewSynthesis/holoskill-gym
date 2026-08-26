@@ -15,7 +15,10 @@ update.
 |---|---|
 | [codebase-overview.md](codebase-overview.md) | How the vendored pieces connect, and the plain OpenAI client pointed at the H base URL |
 | [agents.md](agents.md) | Executor bindings: how SEAGym drives an agent it does not own, and how `HarborRolloutAgent` is subclassed |
-| [todo.md](todo.md) | Roadmap for further executors and their auth requirements |
+| [todo.md](todo.md) | Implementation roadmap for the production data plane, plus the deferred executor backlog |
+| [docs/verifiers-v1-harbor.md](docs/verifiers-v1-harbor.md) | Verifiers v1 to Harbor: taskset, reward, artifact and separate-grader contracts, and current parity gaps |
+| [docs/harbor-task-structure.md](docs/harbor-task-structure.md) | Harbor task authoring: single-step layout, agentic runtime policy, verifier placement and reward output |
+| [docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md) | Harbor's sequential multi-step task contract, documented as a future extension |
 
 ## Vendored dependencies
 

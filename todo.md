@@ -47,6 +47,12 @@ Audit recorded on 2026-08-26:
 
 ### 2. Implement normalized code-optimization evidence
 
+Implementation reference: [Verifiers v1 — Harbor integration](docs/verifiers-v1-harbor.md)
+defines the HarborTaskset, reward, artifact, timeout, network, and separate-grader
+contracts that the normalized evidence layer must preserve. The runtime fields
+and trust boundaries are catalogued in
+[Harbor task and agentic-environment structure](docs/harbor-task-structure.md).
+
 - [ ] Add a dedicated normalized trajectory/verifier layer, for example
       `holoskill_gym/trajectory.py` and `holoskill_gym/verifier.py`, that reads
       each Harbor trial's `result_path` and canonical ATIF trajectory.
@@ -74,6 +80,14 @@ Audit recorded on 2026-08-26:
       the optimizer prompt.
 
 ### 3. Connect the task schema and verifier to Harbor
+
+Task-authoring references:
+[Harbor task and agentic-environment structure](docs/harbor-task-structure.md)
+defines the production single-step package and agentic runtime boundary, while
+[Harbor multi-step tasks](docs/harbor-multi-step-tasks.md) defines the future
+sequential-task extension. The
+[Verifiers v1 Harbor bridge](docs/verifiers-v1-harbor.md) documents which Harbor
+features are currently supported and which parity gaps must remain fail-closed.
 
 - [ ] Integrate `CodeOptTask`, `verify_edit_policy()`, and the code-optimization
       metrics with actual Harbor task materialization. These are currently
