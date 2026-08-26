@@ -35,7 +35,7 @@ Authoritative references:
 Build a minimal but extensible system called **HoloSkill Gym** with this lifecycle:
 
 1. SEAGym materializes a deterministic batch of repository-optimization tasks.
-2. A `CodexCliRolloutAgent` or `ClaudeCodeRolloutAgent` checks out each repository at a pinned commit, installs the current skill, runs the CLI agent in an isolated environment, and captures a normalized trajectory.
+2. One `CliCodeOptRolloutAgent`, configured with `codex_exec` or `claude_code_exec`, asks Harbor to run its built-in Codex or Claude Code agent in an isolated environment and captures a normalized trajectory.
 3. Deterministic verifiers run correctness tests, edit-policy checks, and benchmarks.
 4. SEAGym passes only the scored **training trajectories** to `SkillOptHoloBaseline.update()`.
 5. The baseline invokes SkillOpt’s reflection/aggregation/edit machinery. `holo3-1-35b-a3b` is the optimizer model and must produce schema-constrained add/delete/replace edits.
@@ -559,7 +559,11 @@ Checkpoint save/load and resume must be deterministic and must not require an H 
 
 Implement one configurable `CliCodeOptRolloutAgent` rather than duplicating all logic for Codex and Claude Code. Use an executor strategy selected by `executor`.
 
-Before implementation, inspect SkillOpt’s existing `codex_exec`, `claude_code_exec`, and shared `codex_harness.py`. Reuse them when compatible. Otherwise write thin adapters around the installed CLIs.
+The implemented binding maps `codex_exec` to Harbor's built-in `codex` agent
+and `claude_code_exec` to Harbor's built-in `claude-code` agent. It leaves
+`agent_import_path` unset and delegates common model, environment, attempt, and
+agent-kwarg handling to `HarborRolloutAgent`. Use a custom Harbor-side import
+path only for a foreign harness that Harbor does not already own.
 
 Requirements:
 
@@ -579,7 +583,10 @@ Requirements:
 - do not score infrastructure failure as an ordinary incorrect answer;
 - avoid shell interpolation of task-supplied strings.
 
-If Harbor already owns checkout, isolation, and command execution, integrate through Harbor instead of creating a competing sandbox implementation. Keep the boundary clear: Harbor/environment executes commands; the rollout agent selects prompts/skills and normalizes results.
+Harbor owns checkout, isolation, CLI installation and execution, configured
+timeouts and network policy, and canonical ATIF production. Keep the boundary
+clear: Harbor/environment executes commands; the rollout agent selects the
+registered agent, injects the task-local skill prompt, and normalizes results.
 
 ## 12. Initial skill
 

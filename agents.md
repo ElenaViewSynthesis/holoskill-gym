@@ -67,16 +67,33 @@ the sandboxed agent through `baseline_state.metadata`, which is precisely how
 our evolving skill document will get in front of Codex or Claude Code — no
 global config mutation, exactly as §18 demands.
 
-Practically: our agent subclasses `HarborRolloutAgent`, sets
-`agent_import_path` to a Harbor-side class we write, and lets Harbor own
-checkout, isolation, and command execution — which §11 explicitly instructs
-rather than building a competing sandbox.
+For agents Harbor already owns, no project-specific sandbox class is needed.
+Our rollout binding subclasses `HarborRolloutAgent`, selects a registered
+Harbor agent ID, and leaves `agent_import_path=None`; Harbor's factory imports
+the built-in implementation inside the trial. A custom `agent_import_path`
+remains appropriate for foreign harnesses such as AHE NexAU.
 
 ## What this means for `CliCodeOptRolloutAgent`
 
-It does not exist in SEAGym yet; spec §11 has us build it. Following the
-pattern above, it is one configurable agent with an `executor` strategy field
-(`codex_exec` | `claude_code_exec`) rather than one class per CLI, paired with
-a Harbor-side class that launches the chosen binary inside the sandbox.
+`holoskill_gym.rollout_agent:CliCodeOptRolloutAgent` is implemented as one
+configurable binding with an `executor` strategy field rather than one class per
+CLI:
+
+| Executor strategy | Harbor built-in agent | Custom import path |
+|---|---|---|
+| `codex_exec` | `codex` | none |
+| `claude_code_exec` | `claude-code` | none |
+
+`from_config()` delegates common model, environment, attempt, and agent-kwarg
+handling to `HarborRolloutAgent`, then rejects optimizer-only Holo environment
+variables from the target-agent environment. The checkpointed skill still
+enters through `prompt_template_path`; SEAGym creates a Harbor-compatible
+template without changing the stored skill bytes.
+
+Harbor owns trial checkout, isolation, CLI installation/execution, timeouts,
+network enforcement configured by the task/environment, and ATIF production.
+The remaining project work is normalization and verification: convert Harbor
+results and ATIF artifacts into bounded code-optimization evidence without
+duplicating Harbor's sandbox.
 
 Roadmap and per-executor auth requirements: [todo.md](todo.md).
