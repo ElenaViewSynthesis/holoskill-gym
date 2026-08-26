@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Sequence
 from typing import Literal
 
@@ -23,9 +24,18 @@ def benchmark_speedup(
 
 
 def correctness_gated_performance(*, correctness_pass: bool, speedup: float) -> float:
-    if not math.isfinite(speedup) or speedup < 0:
-        raise ValueError("speedup must be finite and non-negative")
-    return speedup if correctness_pass else 0.0
+    """Map a raw positive speedup to a bounded correctness-gated score.
+
+    Neutral performance maps to 0.5, regressions map below 0.5, and
+    improvements approach 1 without collapsing distinct speedups. Callers
+    retain the raw speedup separately for reporting.
+    """
+
+    if not math.isfinite(speedup) or speedup <= 0:
+        raise ValueError("speedup must be finite and positive")
+    if not correctness_pass:
+        return 0.0
+    return 0.5 + 0.5 * math.tanh(math.log(speedup))
 
 
 def geometric_mean_speedup(values: Sequence[float]) -> float:
@@ -34,6 +44,48 @@ def geometric_mean_speedup(values: Sequence[float]) -> float:
     if any(not math.isfinite(value) or value <= 0 for value in values):
         raise ValueError("speedups must be finite and positive")
     return math.exp(sum(math.log(value) for value in values) / len(values))
+
+
+def latency_delta_pct(*, before: float, after: float) -> float:
+    """Return raw latency change; negative values are improvements."""
+
+    return _percentage_delta(before=before, after=after, label="latency")
+
+
+def throughput_delta_pct(*, before: float, after: float) -> float:
+    """Return raw throughput change; positive values are improvements."""
+
+    return _percentage_delta(before=before, after=after, label="throughput")
+
+
+def peak_memory_delta_pct(*, before: float, after: float) -> float:
+    """Return raw peak-memory change; negative values are improvements."""
+
+    return _percentage_delta(before=before, after=after, label="peak memory")
+
+
+def benchmark_cv(samples: Sequence[float]) -> float:
+    """Return population coefficient of variation for positive samples."""
+
+    if not samples:
+        raise ValueError("benchmark samples must not be empty")
+    values = [float(value) for value in samples]
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("benchmark samples must be finite and positive")
+    mean = statistics.fmean(values)
+    return statistics.pstdev(values) / mean
+
+
+def regression_indicator(*, speedup: float, tolerance: float = 0.0) -> int:
+    if not math.isfinite(speedup) or speedup <= 0:
+        raise ValueError("speedup must be finite and positive")
+    if tolerance < 0:
+        raise ValueError("tolerance must be non-negative")
+    return int(speedup < 1.0 - tolerance)
+
+
+def timeout_indicator(*, timed_out: bool) -> int:
+    return int(timed_out)
 
 
 def separate_costs(
@@ -46,3 +98,9 @@ def separate_costs(
         "optimizer_cost_usd": float(optimizer_cost_usd),
         "total_cost_usd": float(target_cost_usd + optimizer_cost_usd),
     }
+
+
+def _percentage_delta(*, before: float, after: float, label: str) -> float:
+    if not math.isfinite(before) or not math.isfinite(after) or before <= 0 or after < 0:
+        raise ValueError(f"{label} values must be finite with before > 0 and after >= 0")
+    return 100.0 * (after - before) / before

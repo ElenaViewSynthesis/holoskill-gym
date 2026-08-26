@@ -98,6 +98,7 @@ class GateTaskScore(StrictModel):
     correctness_pass: bool
     edit_policy_pass: bool
     infra_valid: bool
+    speedup: float | None = Field(default=None, gt=0)
     error: str | None = None
 
 

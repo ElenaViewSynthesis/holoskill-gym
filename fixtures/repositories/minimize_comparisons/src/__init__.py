@@ -1,0 +1,1 @@
+"""Minimize-comparisons fixture package."""
