@@ -16,6 +16,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
 
+# Vendored checkouts do not pin line endings, so a LF patch must still
+# match a CRLF working tree on Windows.
+APPLY_FLAGS="--ignore-whitespace"
+
 status=0
 apply_patch() {
   local submodule="$1" patch="$2"
@@ -28,12 +32,12 @@ apply_patch() {
     return
   fi
 
-  if git -C "$target" apply --reverse --check "$patch_path" 2>/dev/null; then
+  if git -C "$target" apply --reverse --check $APPLY_FLAGS "$patch_path" 2>/dev/null; then
     echo "OK    $patch already applied to $submodule"
     return
   fi
 
-  if ! git -C "$target" apply --check "$patch_path" 2>/dev/null; then
+  if ! git -C "$target" apply --check $APPLY_FLAGS "$patch_path" 2>/dev/null; then
     echo "FAIL  $patch does not apply cleanly to $submodule" >&2
     echo "      The pin may have moved, or the fix may have landed upstream." >&2
     status=1
@@ -46,7 +50,7 @@ apply_patch() {
     return
   fi
 
-  git -C "$target" apply "$patch_path"
+  git -C "$target" apply $APPLY_FLAGS "$patch_path"
   echo "OK    applied $patch to $submodule"
 }
 
