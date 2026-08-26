@@ -86,6 +86,151 @@ rollouts map `codex_exec` to Harbor's built-in Codex agent (configured with
 Holo remains the optimizer role; target and optimizer usage are recorded
 separately.
 
+## Commands
+
+Every command below is run from the repository root. Substitute your own config
+path for the deterministic example.
+
+### Inspect before you run
+
+`seagym inspect` has four subcommands and none of them execute a rollout, so
+all four are safe without credentials.
+
+```bash
+seagym inspect config <config.json>    # load and validate a config
+seagym inspect runtime <config.json>   # check runtime deps a config needs
+seagym inspect run <run-dir>           # summarize a finished run
+seagym inspect env                     # print runtime paths
+```
+
+Run `inspect config` then `inspect runtime` before any credentialed run. They
+catch an unresolvable class path or a missing executor dependency before
+Harbor capacity or Holo tokens are spent.
+
+### Train
+
+```bash
+seagym train <config.json>
+seagym train <config.json> --run-name my-run --output-dir results/runs
+seagym train <config.json> --resume
+seagym train <config.json> --resume-from-checkpoint epoch_0001
+```
+
+`--resume` picks up the latest checkpoint in the run directory;
+`--resume-from-checkpoint` names one explicitly. Committed SkillOpt updates are
+not repeated on resume — `StateStore` rejects a duplicate update index.
+
+> Resume determinism is enforced by the state store but not yet covered by an
+> integration test (roadmap step 5). Treat a resumed production run as
+> unverified until that test lands.
+
+### Evaluate a frozen checkpoint
+
+```bash
+# a named checkpoint from an earlier run, written to a fresh output directory
+seagym eval --checkpoint <run-dir>/checkpoints/final <config.json>
+
+# re-evaluate the newest checkpoint in place, reusing the same run directory
+seagym eval --checkpoint latest --run-dir <run-dir> <config.json>
+```
+
+`--checkpoint` takes `latest`, a filesystem path, or a bare name. A **bare
+name is resolved inside the run directory this eval creates**, not the run you
+took the checkpoint from, so it only works alongside `--run-dir`. Pass the path
+form when evaluating an earlier run — `--checkpoint final --run-dir <run-dir>`
+fails with `FileExistsError` because anything other than `latest` resets the
+run directory first.
+
+`eval` measures a saved skill on the config's final views and **never calls
+the updater** — no SkillOpt reflection, no Holo proposal, no gate. That is what
+makes it the right tool for:
+
+- **Cross-harness transfer** — evolve with Codex, then evaluate the frozen
+  skill under `claude_code_exec` by pointing `eval` at a config whose rollout
+  agent differs. The skill must not change during transfer evaluation.
+- **`A_0` versus final** — `<run-dir>/checkpoints/initial` against
+  `<run-dir>/checkpoints/final` on the same held-out view is the headline
+  comparison.
+- **Re-scoring** an old checkpoint against a view added later, without
+  retraining.
+
+A training run writes `initial`, `final`, per-epoch (`epoch_0001`) and
+per-evaluation (`E_1`, `E_2`) checkpoints; list them with
+`ls <run-dir>/checkpoints/`.
+
+Verified on the deterministic example: an eval run writes only `checkpoint_eval`
+mode records, no `agent_updates.jsonl`, and zero `agent_update` rows.
+
+Do not use `eval` for routine validation during training — the trainer already
+runs update-validation, replay and final views itself.
+
+> Spec section 21.9 requires that `eval` never reach the optimizer. That
+> property is currently structural, not tested (roadmap step 5). Until the test
+> exists, a bug here would spend Holo tokens and mutate skill state during what
+> should be a read-only measurement.
+
+### Harbor tasks
+
+Harbor owns checkout, isolation, CLI execution and timeouts. These commands
+operate on a task package directly, outside SEAGym, and are how you develop or
+debug a task before wiring it into a config.
+
+```bash
+harbor init --task "<org>/<name>"                 # scaffold a task package
+harbor run -p <path/to/task> -a <agent> -m <model>  # run one task
+```
+
+Pre-populate defaults for a new task from a shared TOML template so a family of
+tasks does not drift apart:
+
+```bash
+harbor tasks init "<task-name>" --metadata-template task-template.toml
+```
+
+Harbor also publishes a task-authoring skill for coding agents:
+
+```bash
+npx skills add harbor-framework/harbor --skill create-task
+```
+
+Layout, `task.toml` fields, network policy and reward output are documented in
+[docs/harbor-task-structure.md](docs/harbor-task-structure.md).
+
+### Multi-step Harbor tasks
+
+A multi-step task runs an ordered sequence of steps in one persistent
+environment, declared as `[[steps]]` entries in `task.toml`.
+
+```bash
+harbor run -t <path/to/multi-step-task> -a claude-code -m <model>
+harbor run -t <path/to/multi-step-task> -a claude-code -m <model> --resume-trajectory
+```
+
+By default every step starts a fresh agent conversation even though the
+environment persists. `--resume-trajectory` continues the agent's native
+session so each step arrives as a follow-up. It is a run setting, not a task
+field, and an agent lacking the `capabilities.resume` capability fails before
+step 1 rather than silently getting fresh sessions.
+
+Multi-step is **not yet supported** by the Verifiers v1 Harbor adapter, so it
+is not reachable from a SEAGym config today. See
+[docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md).
+
+### Maintenance
+
+```bash
+bash scripts/apply-vendor-patches          # re-apply vendor patches
+bash scripts/apply-vendor-patches --check  # report without writing; exits 1 if missing
+python -m pytest -q                        # project test suite
+python -m ruff check holoskill_gym tests
+python -m ruff format --check holoskill_gym tests
+python -m holoskill_gym.preflight --optimizer --structured   # needs HAI_API_KEY
+```
+
+`preflight` is the only command here that spends credentials. It sends one
+structured request to confirm the key, base URL and model resolve.
+
+
 The production role split is configured like this (task and split paths
 omitted here):
 
