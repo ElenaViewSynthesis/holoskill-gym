@@ -29,11 +29,27 @@ update.
 
 ```bash
 git submodule update --init --recursive
+bash scripts/apply-vendor-patches
 ```
 
 The nested `reference/ace/kayba-ai/ace-eval` submodule is private or removed
 upstream. Its initialization failure is expected and does not affect this
 SkillOpt/Holo integration.
+
+### Vendor patches
+
+A submodule records a commit SHA, not file contents, so an edit inside
+`reference/` cannot be committed here and would be lost on a fresh clone.
+Patches live in `patches/` and are re-applied after every `git submodule
+update`. `scripts/apply-vendor-patches` is idempotent, and `--check` reports
+what is missing without writing anything.
+
+| Patch | Target | Why | Upstream |
+|---|---|---|---|
+| `seagym-redaction-usage-keys.patch` | `reference/seagym` | `redact_sensitive()` matches `TOKEN` as a substring, so token *counts* such as `total_tokens` were written to run records as `<redacted>` | [SEAGym#2](https://github.com/antropy-research/SEAGym/pull/2) |
+
+Retire a patch by moving the submodule pin to a commit that already contains
+the fix, then deleting the file.
 
 ## Python environment
 

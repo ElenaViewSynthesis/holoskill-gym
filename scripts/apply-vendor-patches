@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Apply HoloSkill Gym's patches to the pinned vendored checkouts.
+#
+# Submodules record a commit SHA, not file contents, so a local edit inside
+# reference/ cannot be committed by this repository and would be lost on a
+# fresh clone. Patches live here instead and are re-applied after
+# `git submodule update`.
+#
+# Idempotent: an already-applied patch is detected and skipped, so running
+# this twice is safe.
+#
+# Usage: bash scripts/apply-vendor-patches [--check]
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+check_only=0
+[[ "${1:-}" == "--check" ]] && check_only=1
+
+status=0
+apply_patch() {
+  local submodule="$1" patch="$2"
+  local target="$repo_root/$submodule"
+  local patch_path="$repo_root/patches/$patch"
+
+  if [[ ! -d "$target" ]]; then
+    echo "SKIP  $submodule is not initialized; run git submodule update --init --recursive" >&2
+    status=1
+    return
+  fi
+
+  if git -C "$target" apply --reverse --check "$patch_path" 2>/dev/null; then
+    echo "OK    $patch already applied to $submodule"
+    return
+  fi
+
+  if ! git -C "$target" apply --check "$patch_path" 2>/dev/null; then
+    echo "FAIL  $patch does not apply cleanly to $submodule" >&2
+    echo "      The pin may have moved, or the fix may have landed upstream." >&2
+    status=1
+    return
+  fi
+
+  if (( check_only )); then
+    echo "TODO  $patch is not applied to $submodule"
+    status=1
+    return
+  fi
+
+  git -C "$target" apply "$patch_path"
+  echo "OK    applied $patch to $submodule"
+}
+
+apply_patch reference/seagym seagym-redaction-usage-keys.patch
+
+exit "$status"

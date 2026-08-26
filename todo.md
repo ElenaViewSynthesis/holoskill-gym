@@ -39,7 +39,15 @@ Audit recorded on 2026-08-26:
 - `reference/seagym` and `reference/skillopt` report broad working-tree changes
   caused by LF-to-CRLF conversion. Representative source and documentation
   files match their pinned Git blobs after removing carriage returns; no
-  vendored file was normalized, reset, or edited.
+  vendored file was normalized or reset.
+- Superseded on 2026-08-26 for `reference/seagym` only. One deliberate patch is
+  now applied to the pinned checkout, `patches/seagym-redaction-usage-keys.patch`,
+  because SEAGym's `redact_sensitive()` matches `TOKEN` as a substring and so
+  replaced token *counts* with `<redacted>` in run records. The patch is applied
+  by `scripts/apply-vendor-patches`, never committed into the submodule, and the
+  pin stays `9e61e14`. Proposed upstream as
+  [SEAGym#2](https://github.com/antropy-research/SEAGym/pull/2); drop the patch
+  and move the pin once it lands.
 - SEAGym's `reference/ace`, `reference/agentic-harness-engineering`,
   `reference/harbor`, and `reference/tf-grpo` submodules are initialized. The
   nested private or removed `reference/ace/ace-eval` submodule is the sole
