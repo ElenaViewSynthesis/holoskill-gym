@@ -1,7 +1,9 @@
 from pathlib import Path
 
 import pytest
-from seagym.baselines import BaselineState
+from seagym.baselines import BaselineState, TaskBatch
+from seagym.data.types import TaskIndex
+from seagym.envs import TaskRunResult
 
 from holoskill_gym.rollout_agent import CliCodeOptRolloutAgent
 
@@ -72,3 +74,58 @@ def test_unknown_executor_fails_closed(tmp_path) -> None:
             run_dir=tmp_path,
             base_dir=tmp_path,
         )
+
+
+def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_path) -> None:
+    class FakeEnvironment:
+        def run_tasks(self, tasks, *, view_name, mode, agent_id):
+            assert [task.task_id for task in tasks] == ["task-1"]
+            assert agent_id == "codex"
+            return [
+                TaskRunResult(
+                    task_id="task-1",
+                    view_name=view_name,
+                    mode=mode,
+                    rewards={"reward": 1.0},
+                    score=1.0,
+                    success=True,
+                    refs={"trial_name": "attempt-1"},
+                )
+            ]
+
+    agent = CliCodeOptRolloutAgent.from_config(
+        name="codeopt",
+        config={"executor": "codex_exec"},
+        models={"rollout_model": {"model": "gpt-test"}},
+        run_dir=tmp_path,
+        base_dir=tmp_path,
+    )
+    task_index = TaskIndex.from_dict(
+        {
+            "version": "test",
+            "tasks": [
+                {
+                    "task_id": "task-1",
+                    "source": {"type": "fixture"},
+                    "attributes": {},
+                    "scoring": {},
+                }
+            ],
+        }
+    )
+    batch = TaskBatch(task_ids=["task-1"], view_name="train", mode="train")
+
+    result = agent.rollout(
+        batch,
+        env=FakeEnvironment(),
+        task_index=task_index,
+        baseline_state=BaselineState(tmp_path, {}),
+    )
+
+    evidence = result.trajectories[0].refs["extra"]["holoskill_gym"]["normalized_evidence"]
+    assert evidence["task_id"] == "task-1"
+    assert evidence["attempt_id"] == "attempt-1"
+    assert evidence["executor"] == "codex_exec"
+    assert evidence["model"] == "gpt-test"
+    reported = result.to_task_results()[0]
+    assert reported.refs["extra"]["holoskill_gym"]["normalized_evidence"] == evidence

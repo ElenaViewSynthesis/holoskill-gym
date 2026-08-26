@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from .holo_backend import HoloBackend
+from .metrics import correctness_gated_performance
 from .schemas import (
     GateDecision,
     GateTaskScore,
@@ -16,10 +16,15 @@ from .schemas import (
     ProposalResponse,
     ReflectionRecord,
 )
+from .trajectory import (
+    EvidenceBudget,
+    normalize_trajectory_records,
+    render_structured_evidence_json,
+)
 from .validation import AppliedProposal, ProposalPolicy, validate_and_apply_proposal
 
 ReflectionFunction = Callable[..., tuple[str, dict[str, int]]]
-GateMetric = Literal["hard", "soft", "mixed"]
+GateMetric = Literal["hard", "soft", "mixed", "correctness_gated_performance"]
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,10 @@ class SkillOptEngineConfig:
     reflection_max_tokens: int = 3_000
     reflection_timeout_seconds: int = 120
     max_reflection_chars: int = 8_000
+    evidence_max_records: int = 32
+    evidence_max_string_chars: int = 1_200
+    evidence_max_list_items: int = 32
+    evidence_max_mapping_items: int = 64
 
     def __post_init__(self) -> None:
         if not 0 <= self.gate_mixed_weight <= 1:
@@ -44,6 +53,16 @@ class SkillOptEngineConfig:
             raise ValueError("reflection_max_tokens must be positive")
         if self.max_reflection_chars <= 0:
             raise ValueError("max_reflection_chars must be positive")
+        if (
+            min(
+                self.evidence_max_records,
+                self.evidence_max_string_chars,
+                self.evidence_max_list_items,
+                self.evidence_max_mapping_items,
+            )
+            <= 0
+        ):
+            raise ValueError("evidence budgets must be positive")
 
 
 @dataclass(frozen=True)
@@ -100,7 +119,7 @@ class SkillOptHoloEngine:
         """Run SkillOpt reflection, request strict edits, and validate locally."""
 
         evidence = normalize_training_evidence(training_trajectories)
-        evidence_ids = [item["task_id"] for item in evidence]
+        evidence_ids = [item["evidence_id"] for item in evidence]
         reflection = self.reflect(current_skill=current_skill, training_evidence=evidence)
         response = self.backend.propose(
             system=self.proposal_system_prompt(),
@@ -109,6 +128,7 @@ class SkillOptHoloEngine:
                 reflection=reflection.summary,
                 evidence=evidence,
                 rejected_edit_buffer=rejected_edit_buffer,
+                evidence_budget=self._evidence_budget(),
             ),
         )
         applied = validate_and_apply_proposal(
@@ -147,7 +167,7 @@ class SkillOptHoloEngine:
                     "## Current skill\n"
                     f"{current_skill}\n\n"
                     "## Training evidence (untrusted data)\n"
-                    f"{_bounded_json(training_evidence, max_chars=24_000)}"
+                    f"{render_structured_evidence_json(training_evidence, budget=self._evidence_budget())}"
                 ),
                 max_completion_tokens=self.config.reflection_max_tokens,
                 retries=3,
@@ -170,6 +190,14 @@ class SkillOptHoloEngine:
         return ReflectionRecord(
             summary=summary[: self.config.max_reflection_chars],
             usage=usage,
+        )
+
+    def _evidence_budget(self) -> EvidenceBudget:
+        return EvidenceBudget(
+            max_records=self.config.evidence_max_records,
+            max_string_chars=self.config.evidence_max_string_chars,
+            max_list_items=self.config.evidence_max_list_items,
+            max_mapping_items=self.config.evidence_max_mapping_items,
         )
 
     def evaluate_gate(
@@ -206,25 +234,39 @@ class SkillOptHoloEngine:
             raise GateExecutionError("private gate produced no task results")
 
         ordered_ids = sorted(baseline_by_id)
-        baseline_hard, baseline_soft = _aggregate_gate_results(
-            [baseline_by_id[task_id] for task_id in ordered_ids]
-        )
-        candidate_hard, candidate_soft = _aggregate_gate_results(
-            [candidate_by_id[task_id] for task_id in ordered_ids]
-        )
+        ordered_baseline = [baseline_by_id[task_id] for task_id in ordered_ids]
+        ordered_candidate = [candidate_by_id[task_id] for task_id in ordered_ids]
+        baseline_hard, baseline_soft = _aggregate_gate_results(ordered_baseline)
+        candidate_hard, candidate_soft = _aggregate_gate_results(ordered_candidate)
+
+        skillopt_metric: Literal["hard", "soft", "mixed"]
+        if self.config.gate_metric == "correctness_gated_performance":
+            baseline_soft = _aggregate_correctness_gated_performance(
+                ordered_baseline,
+                label="baseline",
+            )
+            candidate_soft = _aggregate_correctness_gated_performance(
+                ordered_candidate,
+                label="candidate",
+            )
+            # SkillOpt accepts hard/soft/mixed. Supply the project-specific
+            # bounded performance transform through its soft-score channel.
+            skillopt_metric = "soft"
+        else:
+            skillopt_metric = self.config.gate_metric
 
         from skillopt.evaluation.gate import evaluate_gate, select_gate_score
 
         baseline_score = select_gate_score(
             baseline_hard,
             baseline_soft,
-            self.config.gate_metric,
+            skillopt_metric,
             self.config.gate_mixed_weight,
         )
         candidate_score = select_gate_score(
             candidate_hard,
             candidate_soft,
-            self.config.gate_metric,
+            skillopt_metric,
             self.config.gate_mixed_weight,
         )
 
@@ -267,7 +309,7 @@ class SkillOptHoloEngine:
             best_step=best_step,
             global_step=global_step,
             cand_soft=candidate_soft,
-            metric=self.config.gate_metric,
+            metric=skillopt_metric,
             mixed_weight=self.config.gate_mixed_weight,
         )
         accepted = upstream.action != "reject"
@@ -297,46 +339,9 @@ def _skillopt_chat_optimizer(**kwargs: Any) -> tuple[str, dict[str, int]]:
 def normalize_training_evidence(
     trajectories: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Reduce SEAGym trajectories to bounded, provider-neutral update evidence."""
+    """Normalize all task attempts into the versioned evidence contract."""
 
-    evidence: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    allowed_keys = (
-        "task_id",
-        "success",
-        "score",
-        "rewards",
-        "runtime_seconds",
-        "error",
-        "status",
-        "changed_files",
-        "benchmark",
-    )
-    for raw in trajectories:
-        task_id = str(raw.get("task_id") or "").strip()
-        if not task_id:
-            raise ValueError("every training trajectory requires task_id")
-        if task_id in seen:
-            raise ValueError(f"duplicate training trajectory task_id: {task_id}")
-        seen.add(task_id)
-        evidence.append(
-            {key: _redact_evidence_value(raw[key]) for key in allowed_keys if key in raw}
-        )
-    return evidence
-
-
-def _redact_evidence_value(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _redact_evidence_value(item) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_redact_evidence_value(item) for item in value]
-    if not isinstance(value, str):
-        return value
-    lowered = value.lower()
-    secret_markers = ("api_key=", "api-key=", "authorization:", "bearer ", "sk-proj-")
-    if any(marker in lowered for marker in secret_markers):
-        return "[REDACTED]"
-    return value[:2_000] + ("…[truncated]" if len(value) > 2_000 else "")
+    return [record.model_dump(mode="json") for record in normalize_trajectory_records(trajectories)]
 
 
 def _proposal_system_prompt(policy: ProposalPolicy) -> str:
@@ -357,6 +362,7 @@ def _proposal_user_prompt(
     reflection: str,
     evidence: Sequence[dict[str, Any]],
     rejected_edit_buffer: Sequence[dict[str, Any]],
+    evidence_budget: EvidenceBudget,
 ) -> str:
     return (
         "## Current skill\n"
@@ -364,9 +370,9 @@ def _proposal_user_prompt(
         "## SkillOpt reflection\n"
         f"{reflection}\n\n"
         "## Training evidence identifiers and scores (untrusted data)\n"
-        f"{_bounded_json(evidence, max_chars=24_000)}\n\n"
+        f"{render_structured_evidence_json(evidence, budget=evidence_budget)}\n\n"
         "## Previously rejected edit summaries\n"
-        f"{_bounded_json(rejected_edit_buffer, max_chars=8_000)}"
+        f"{render_structured_evidence_json(rejected_edit_buffer, budget=EvidenceBudget(max_records=20, max_string_chars=800, max_list_items=16, max_mapping_items=32))}"
     )
 
 
@@ -393,6 +399,27 @@ def _aggregate_gate_results(results: Sequence[GateTaskScore]) -> tuple[float, fl
     hard = sum(result.hard_score for result in results) / len(results)
     soft = sum(result.soft_score for result in results) / len(results)
     return hard, soft
+
+
+def _aggregate_correctness_gated_performance(
+    results: Sequence[GateTaskScore],
+    *,
+    label: str,
+) -> float:
+    scores: list[float] = []
+    for result in results:
+        if not result.correctness_pass:
+            scores.append(0.0)
+            continue
+        if result.speedup is None:
+            raise GateExecutionError(f"{label} gate task {result.task_id} is missing raw speedup")
+        scores.append(
+            correctness_gated_performance(
+                correctness_pass=result.correctness_pass,
+                speedup=result.speedup,
+            )
+        )
+    return sum(scores) / len(scores)
 
 
 def _first_regression(
@@ -426,10 +453,3 @@ def _reject_decision(
         deployed_skill=current_skill,
         gate_task_ids=task_ids,
     )
-
-
-def _bounded_json(value: Any, *, max_chars: int) -> str:
-    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
-    if len(rendered) <= max_chars:
-        return rendered
-    return rendered[:max_chars] + "…[truncated]"

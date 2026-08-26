@@ -34,6 +34,7 @@ from .leakage import LeakageGuard
 from .schemas import GateDecision, GateTaskScore, OptimizerUsage
 from .state import StateIntegrityError, StateStore, prompt_sha256, skill_sha256
 from .validation import ProposalPolicy, ProposalValidationError
+from .verifier import verifier_result_from_trajectory
 
 
 class GateEvaluator(Protocol):
@@ -98,10 +99,12 @@ class SkillOptHoloBaseline(BaseBaseline):
         else:
             raise ValueError(f"unsupported optimizer_backend: {optimizer_backend}")
         gate_metric = str(config.get("gate_metric", "soft"))
-        if gate_metric == "correctness_gated_performance":
-            # GateTaskScore.soft_score already carries this transformed metric.
-            gate_metric = "soft"
-        if gate_metric not in {"hard", "soft", "mixed"}:
+        if gate_metric not in {
+            "hard",
+            "soft",
+            "mixed",
+            "correctness_gated_performance",
+        }:
             raise ValueError(
                 "gate_metric must be hard, soft, mixed, or correctness_gated_performance"
             )
@@ -113,6 +116,10 @@ class SkillOptHoloBaseline(BaseBaseline):
                 gate_mixed_weight=float(config.get("gate_mixed_weight", 0.5)),
                 gate_no_regression=bool(config.get("gate_no_regression", True)),
                 strict_improvement_epsilon=float(config.get("strict_improvement_epsilon", 0.001)),
+                evidence_max_records=int(config.get("max_update_records") or 32),
+                evidence_max_string_chars=int(config.get("evidence_max_string_chars", 1_200)),
+                evidence_max_list_items=int(config.get("evidence_max_list_items", 32)),
+                evidence_max_mapping_items=int(config.get("evidence_max_mapping_items", 64)),
             ),
             proposal_policy=ProposalPolicy(
                 max_edit_operations=int(config.get("max_edit_operations", 3)),
@@ -183,8 +190,6 @@ class SkillOptHoloBaseline(BaseBaseline):
             raise StateIntegrityError(f"update {self.update_index} was already committed")
         current_skill = self.store.read_skill()
         raw_records = [item.to_dict() for item in trajectories.trajectories]
-        if self.max_update_records is not None:
-            raw_records = raw_records[: self.max_update_records]
         evidence = normalize_training_evidence(raw_records)
         _write_jsonl(update_dir / "trajectories.jsonl", evidence)
         (update_dir / "skill_before.md").write_text(current_skill, encoding="utf-8")
@@ -394,24 +399,34 @@ class SkillOptHoloBaseline(BaseBaseline):
         )
         scores: list[GateTaskScore] = []
         for trajectory in trajectories.trajectories:
-            correctness = bool(trajectory.success)
-            policy_value = trajectory.rewards.get("edit_policy_pass")
-            policy = bool(policy_value is not None and policy_value >= 1)
-            infra_valid = trajectory.error is None
-            soft = max(0.0, min(1.0, float(trajectory.score))) if infra_valid else 0.0
-            if not correctness or not policy:
-                soft = 0.0
-            scores.append(
-                GateTaskScore(
-                    task_id=trajectory.task_id,
-                    hard_score=float(correctness and policy),
-                    soft_score=soft,
-                    correctness_pass=correctness,
-                    edit_policy_pass=policy,
-                    infra_valid=infra_valid,
-                    error=trajectory.error,
+            verifier_result = verifier_result_from_trajectory(trajectory)
+            if verifier_result is None:
+                scores.append(
+                    GateTaskScore(
+                        task_id=trajectory.task_id,
+                        hard_score=0,
+                        soft_score=0,
+                        correctness_pass=False,
+                        edit_policy_pass=False,
+                        infra_valid=False,
+                        error="strict HoloSkill verifier result is missing",
+                    )
                 )
-            )
+                continue
+            if verifier_result.task_id != trajectory.task_id:
+                scores.append(
+                    GateTaskScore(
+                        task_id=trajectory.task_id,
+                        hard_score=0,
+                        soft_score=0,
+                        correctness_pass=False,
+                        edit_policy_pass=False,
+                        infra_valid=False,
+                        error="strict verifier task ID does not match trajectory task ID",
+                    )
+                )
+                continue
+            scores.append(verifier_result.to_gate_task_score())
         return scores
 
     def _requirements(self) -> tuple[SkillOptHoloEngine, LeakageGuard]:

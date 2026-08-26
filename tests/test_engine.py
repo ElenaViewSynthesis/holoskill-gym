@@ -77,6 +77,7 @@ def score(
     correctness: bool = True,
     policy: bool = True,
     infra: bool = True,
+    speedup: float | None = None,
 ) -> GateTaskScore:
     return GateTaskScore(
         task_id=task_id,
@@ -85,6 +86,7 @@ def score(
         correctness_pass=correctness,
         edit_policy_pass=policy,
         infra_valid=infra,
+        speedup=speedup,
     )
 
 
@@ -116,6 +118,42 @@ def test_gate_accepts_only_strict_improvement_using_upstream_gate() -> None:
     assert decision.accepted is True
     assert decision.action == "accept_new_best"
     assert decision.deployed_skill.endswith("Improved.\n")
+
+
+def test_correctness_gated_metric_uses_bounded_transform_of_raw_speedup() -> None:
+    engine = SkillOptHoloEngine(
+        fake_backend(),
+        config=SkillOptEngineConfig(gate_metric="correctness_gated_performance"),
+        reflection_fn=fake_reflection,
+    )
+
+    decision = engine.evaluate_gate(
+        current_skill=SKILL,
+        candidate_skill=SKILL + "\nImproved.\n",
+        baseline_results=[score("gate-1", 0.99, speedup=1.2)],
+        candidate_results=[score("gate-1", 0.01, speedup=10.0)],
+        global_step=1,
+    )
+
+    assert decision.accepted is True
+    assert 0 <= decision.baseline_score < decision.candidate_score <= 1
+
+
+def test_correctness_gated_metric_requires_untransformed_speedup() -> None:
+    engine = SkillOptHoloEngine(
+        fake_backend(),
+        config=SkillOptEngineConfig(gate_metric="correctness_gated_performance"),
+        reflection_fn=fake_reflection,
+    )
+
+    with pytest.raises(GateExecutionError, match="missing raw speedup"):
+        engine.evaluate_gate(
+            current_skill=SKILL,
+            candidate_skill=SKILL + "\nImproved.\n",
+            baseline_results=[score("gate-1", 0.5)],
+            candidate_results=[score("gate-1", 0.7)],
+            global_step=1,
+        )
 
 
 def test_gate_rejects_improvement_below_epsilon() -> None:

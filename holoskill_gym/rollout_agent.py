@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from seagym.baselines import BaselineState, TrajectoryBatch
+from seagym.baselines.data import TaskBatch
+from seagym.data.types import TaskIndex
+from seagym.envs.base import TaskEnv
 from seagym.rollout_agents.harbor import HarborRolloutAgent
+
+from .trajectory import NormalizationContext, normalize_trajectory_records
 
 EXECUTOR_TO_HARBOR_AGENT = {
     "codex_exec": "codex",
@@ -20,6 +26,7 @@ class CliCodeOptRolloutAgent(HarborRolloutAgent):
     """Select a built-in Harbor agent while reusing its isolation and execution."""
 
     executor: str = "codex_exec"
+    target_model: str | None = None
 
     @classmethod
     def from_config(
@@ -54,6 +61,11 @@ class CliCodeOptRolloutAgent(HarborRolloutAgent):
                 "optimizer-only environment variables cannot be exported to target rollouts: "
                 + ", ".join(sorted(leaked))
             )
+        model_ref = str(config.get("model_ref", "rollout_model"))
+        model_config = models.get(model_ref)
+        target_model = None
+        if isinstance(model_config, dict) and model_config.get("model"):
+            target_model = str(model_config["model"])
         return cls(
             agent_id=delegated.agent_id,
             agent_import_path=delegated.agent_import_path,
@@ -62,6 +74,7 @@ class CliCodeOptRolloutAgent(HarborRolloutAgent):
             n_attempts=delegated.n_attempts,
             attempt_modes=delegated.attempt_modes,
             executor=executor,
+            target_model=target_model,
         )
 
     def initialize(self, run_dir: Path):
@@ -71,6 +84,53 @@ class CliCodeOptRolloutAgent(HarborRolloutAgent):
                 "executor": self.executor,
                 "execution_owner": "Harbor",
                 "skill_injection": "prompt_template_path",
+                "target_model": self.target_model,
             }
         )
         return state
+
+    def rollout(
+        self,
+        batch: TaskBatch,
+        *,
+        env: TaskEnv,
+        task_index: TaskIndex,
+        baseline_state: BaselineState,
+    ) -> TrajectoryBatch:
+        """Attach the normalized contract before SEAGym persists or reflects on it."""
+
+        trajectories = super().rollout(
+            batch,
+            env=env,
+            task_index=task_index,
+            baseline_state=baseline_state,
+        )
+        context = NormalizationContext.from_metadata(
+            baseline_state.metadata,
+            batch_metadata=batch.metadata,
+            executor=self.executor,
+            model=self.target_model,
+        )
+        normalized = normalize_trajectory_records(
+            [trajectory.to_dict() for trajectory in trajectories.trajectories],
+            context=context,
+        )
+        enriched = []
+        for trajectory, evidence in zip(
+            trajectories.trajectories,
+            normalized,
+            strict=True,
+        ):
+            refs = dict(trajectory.refs)
+            extra = dict(refs.get("extra") or {})
+            project = dict(extra.get("holoskill_gym") or {})
+            project["normalized_evidence"] = evidence.model_dump(mode="json")
+            extra["holoskill_gym"] = project
+            refs["extra"] = extra
+            task_result = (
+                None
+                if trajectory.task_result is None
+                else replace(trajectory.task_result, refs=refs)
+            )
+            enriched.append(replace(trajectory, refs=refs, task_result=task_result))
+        return replace(trajectories, trajectories=enriched)
