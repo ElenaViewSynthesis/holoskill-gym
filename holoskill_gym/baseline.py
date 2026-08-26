@@ -297,7 +297,15 @@ class SkillOptHoloBaseline(BaseBaseline):
                 "rejected_count": next_state.rejected_count,
                 "skill_version": next_state.skill_version,
             },
-            logs={"optimizer_usage": usage.model_dump(), "cost_role": "optimizer"},
+            logs={
+                "optimizer_usage": usage.model_dump(),
+                "cost": {
+                    "input_tokens": usage.prompt_tokens,
+                    "output_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens,
+                },
+                "cost_role": "optimizer",
+            },
             artifacts={
                 "update_dir": str(update_dir),
                 "prompt_template_path": str(self.store.skill_path),

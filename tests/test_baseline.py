@@ -125,6 +125,11 @@ def test_baseline_accepts_and_persists_auditable_update(tmp_path) -> None:
     assert (update_dir / "gate_decision.json").exists()
     assert "should-not-persist" not in (update_dir / "trajectories.jsonl").read_text()
     assert result.logs["optimizer_usage"]["total_tokens"] == 35
+    assert result.logs["cost"] == {
+        "input_tokens": 12,
+        "output_tokens": 23,
+        "total_tokens": 35,
+    }
 
 
 def test_rejected_candidate_keeps_deployed_bytes(tmp_path) -> None:
