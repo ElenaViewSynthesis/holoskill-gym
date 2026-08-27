@@ -18,3 +18,6 @@ From the repository root:
 
 The first update replaces the single measurement with a median of three runs.
 The private deterministic gate accepts it. The second proposal is a no-op.
+The generated `metrics.json` also exercises the registered correctness,
+performance, reliability, candidate-disposition, target-cost, and optimizer-cost
+report paths.
