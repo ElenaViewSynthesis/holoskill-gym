@@ -211,10 +211,13 @@ class DeterministicCodeOptRolloutAgent:
         fixture = task.fixtures.get("codeopt")
         if not isinstance(fixture, dict):
             raise TypeError(f"task {task.task_id} requires fixtures.codeopt")
-        self._trial_index += 1
         safe_task_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", task.task_id)
-        trial_name = f"{safe_task_id}__fixture{self._trial_index:06d}"
-        trial_dir = self._run_dir / "fixture_trials" / trial_name
+        while True:
+            self._trial_index += 1
+            trial_name = f"{safe_task_id}__fixture{self._trial_index:06d}"
+            trial_dir = self._run_dir / "fixture_trials" / trial_name
+            if not trial_dir.exists():
+                break
         repo_path = trial_dir / "worktree"
         source_repo = (self.fixture_root / str(fixture["repository"])).resolve()
         solution = (self.fixture_root / str(fixture["solution"])).resolve()
