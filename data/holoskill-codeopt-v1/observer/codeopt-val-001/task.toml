@@ -1,0 +1,33 @@
+schema_version = "1.4"
+
+[task]
+name = "holoskill/codeopt-val-001"
+version = "1.0.0"
+description = "redundant-serialization code optimization on a pinned local repository"
+keywords = ["optimization", "programming", "redundant-serialization"]
+
+[metadata]
+category = "programming"
+difficulty = "hard"
+difficulty_explanation = "Single hot path; the win is algorithmic, not incidental."
+holoskill_family = "redundant-serialization"
+holoskill_module = "src/serialization.py"
+holoskill_benchmark_metric = "serialize_latency_units"
+holoskill_optimization_direction = "minimize"
+
+[agent]
+timeout_sec = 1200.0
+user = "root"
+
+[verifier]
+timeout_sec = 600.0
+user = "root"
+
+[environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 2
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0

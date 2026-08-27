@@ -1,0 +1,33 @@
+schema_version = "1.4"
+
+[task]
+name = "holoskill/codeopt-test-001"
+version = "1.0.0"
+description = "concurrency-locking code optimization on a pinned local repository"
+keywords = ["optimization", "programming", "concurrency-locking"]
+
+[metadata]
+category = "programming"
+difficulty = "hard"
+difficulty_explanation = "Single hot path; the win is algorithmic, not incidental."
+holoskill_family = "concurrency-locking"
+holoskill_module = "src/locking.py"
+holoskill_benchmark_metric = "read_latency_units"
+holoskill_optimization_direction = "minimize"
+
+[agent]
+timeout_sec = 1200.0
+user = "root"
+
+[verifier]
+timeout_sec = 600.0
+user = "root"
+
+[environment]
+network_mode = "no-network"
+build_timeout_sec = 600.0
+os = "linux"
+cpus = 2
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0
