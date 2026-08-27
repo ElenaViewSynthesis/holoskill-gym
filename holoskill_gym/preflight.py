@@ -51,7 +51,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--prompt", default=PROMPT)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--env-file", default=".env")
+    parser.add_argument(
+        "--inkling",
+        action="store_true",
+        help="Preflight the Inkling optimizer through OpenRouter instead of Holo.",
+    )
+    from .inkling_backend import add_sampling_arguments
+
+    add_sampling_arguments(parser)
     args = parser.parse_args(argv)
+
+    if args.inkling:
+        return _inkling_preflight(args)
 
     # Load .env first so that HOLO_* settings from the file are visible below.
     env_path = Path(args.env_file).resolve()
@@ -178,3 +189,56 @@ def _structured_preflight(*, model: str, timeout: float) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _inkling_preflight(args) -> int:
+    """One structured request to Inkling with the parameters given on the CLI."""
+
+    from .holo_backend import HoloBackendError
+    from .inkling_backend import InklingBackend, InklingBackendConfig, sampling_from_args
+
+    sampling = sampling_from_args(args)
+    print("OpenRouter Inkling preflight")
+    print(f"  base_url    : {os.environ.get('OPENROUTER_BASE_URL', '(default)')}")
+    print(f"  model       : {os.environ.get('INKLING_MODEL', '(default)')}")
+    print("  api_key     : configured (value intentionally not displayed)")
+    print(f"  temperature : {sampling.temperature}")
+    print(f"  top_p       : {sampling.top_p}")
+    print(f"  max_tokens  : {sampling.max_tokens}")
+    print(f"  seed        : {sampling.seed}")
+    print(f"  reasoning   : {sampling.reasoning_payload()}")
+    print()
+
+    try:
+        backend = InklingBackend(
+            InklingBackendConfig.from_env(
+                sampling=sampling,
+                timeout_seconds=args.timeout,
+                max_attempts=1,
+            )
+        )
+        response = backend.propose(
+            system=(
+                "Return a strict SkillUpdateProposal. This is a connectivity check; emit no edits."
+            ),
+            user="The current skill is '# Skill'. No training evidence is available.",
+        )
+    except HoloBackendError as exc:
+        details = exc.to_safe_dict()
+        print(
+            f"FAIL  inkling preflight: {details['type']} status={details['status_code']}",
+            file=sys.stderr,
+        )
+        if details["type"] == "model_access_denied":
+            print(
+                "      OpenRouter restricts some models to registered agentic "
+                "harnesses; see docs/openrouter-inkling.md",
+                file=sys.stderr,
+            )
+        return 11
+    print("OK    strict json_schema request succeeded")
+    print(f"  response_id  : {response.call.response_id}")
+    print(f"  model_served : {response.call.model}")
+    print(f"  edits        : {len(response.proposal.edits)}")
+    print(f"  tokens       : total={response.call.usage.total_tokens}")
+    return 0

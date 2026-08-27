@@ -98,8 +98,41 @@ class SkillOptHoloBaseline(BaseBaseline):
                 initial_backoff_seconds=float(config.get("optimizer_initial_backoff_seconds", 6.0)),
                 max_backoff_seconds=float(config.get("optimizer_max_backoff_seconds", 30.0)),
             )
+        elif optimizer_backend == "inkling_openrouter":
+            from .inkling_backend import InklingBackend, InklingSampling
+
+            backend = InklingBackend.from_env(
+                model=config.get("optimizer_model") or None,
+                sampling=InklingSampling(
+                    **{
+                        key: config[f"inkling_{key}"]
+                        for key in (
+                            "temperature",
+                            "top_p",
+                            "max_tokens",
+                            "seed",
+                            "frequency_penalty",
+                            "presence_penalty",
+                            "reasoning_enabled",
+                            "reasoning_effort",
+                            "reasoning_max_tokens",
+                            "reasoning_exclude",
+                        )
+                        if f"inkling_{key}" in config
+                    }
+                )
+                if any(key.startswith("inkling_") for key in config)
+                else None,
+                timeout_seconds=float(config.get("optimizer_timeout_seconds", 120)),
+                max_attempts=int(config.get("optimizer_max_attempts", 6)),
+                initial_backoff_seconds=float(config.get("optimizer_initial_backoff_seconds", 6.0)),
+                max_backoff_seconds=float(config.get("optimizer_max_backoff_seconds", 30.0)),
+            )
         else:
-            raise ValueError(f"unsupported optimizer_backend: {optimizer_backend}")
+            raise ValueError(
+                f"unsupported optimizer_backend: {optimizer_backend}; expected one of "
+                "holo_openai_compatible, inkling_openrouter, deterministic_fake"
+            )
         gate_metric = str(config.get("gate_metric", "soft"))
         if gate_metric not in {
             "hard",
