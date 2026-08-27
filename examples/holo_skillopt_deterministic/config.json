@@ -83,8 +83,10 @@
       "forbidden_edit_rate",
       "reliability_rates",
       "p95_performance_change",
-      "cross_harness_transfer_delta"
+      "cross_harness_transfer_delta",
+      "role_separated_spend"
     ],
+    "cost": [],
     "registry": [
       {
         "name": "correct_speedup_geomean",
@@ -120,6 +122,11 @@
         "name": "cross_harness_transfer_delta",
         "type": "python",
         "import_path": "holoskill_gym.report_metrics:CrossHarnessTransferDeltaMetric"
+      },
+      {
+        "name": "role_separated_spend",
+        "type": "python",
+        "import_path": "holoskill_gym.report_metrics:RoleSeparatedSpendMetric"
       }
     ]
   },

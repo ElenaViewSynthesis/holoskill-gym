@@ -12,6 +12,7 @@ from holoskill_gym.report_metrics import (
     GateOffApplicationRateMetric,
     P95PerformanceChangeMetric,
     ReliabilityRatesMetric,
+    RoleSeparatedSpendMetric,
 )
 
 
@@ -96,12 +97,13 @@ def test_gate_off_is_never_counted_as_private_gate_acceptance() -> None:
     acceptance = CandidateAcceptanceRateMetric().compute(records, {})
     gate_off = GateOffApplicationRateMetric().compute(records, {})
 
-    assert acceptance == {
-        "value": 0.5,
-        "accepted_by_private_gate": 1,
-        "rejected_by_private_gate": 1,
-        "private_gate_decisions": 2,
-    }
+    assert acceptance["value"] == 0.5
+    assert acceptance["accepted_by_private_gate"] == 1
+    assert acceptance["rejected_by_private_gate"] == 1
+    assert acceptance["private_gate_decisions"] == 2
+    assert acceptance["disposition_counts"]["applied_gate_off_ablation"] == 1
+    assert acceptance["disposition_counts"]["no_op_proposal"] == 1
+    assert acceptance["disposition_rates"]["applied_gate_off_ablation"] == 0.25
     assert gate_off["applications"] == 1
     assert gate_off["private_gate_acceptance"] is False
 
@@ -161,3 +163,20 @@ def test_cross_harness_delta_compares_target_eval_to_hashed_source_records(
     assert result["applicable"] is True
     assert result["by_view"] == {"id_test": pytest.approx(-0.15)}
     assert len(result["reference_sha256"]) == 64
+
+
+def test_spend_metric_never_emits_a_combined_target_optimizer_total() -> None:
+    records = [
+        {"mode": "train", "cost": {"input_tokens": 10, "total_tokens": 15, "cost_usd": 1}},
+        {
+            "mode": "update",
+            "cost": {"input_tokens": 20, "total_tokens": 30, "cost_usd": 2},
+        },
+    ]
+
+    result = RoleSeparatedSpendMetric().compute(records, {})
+
+    assert set(result) == {"target", "optimizer"}
+    assert result["target"]["total_tokens"] == 15
+    assert result["optimizer"]["total_tokens"] == 30
+    assert "overall" not in result

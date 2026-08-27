@@ -51,11 +51,29 @@ class CandidateAcceptanceRateMetric:
         accepted = statuses.count("accepted_by_skillopt_gate")
         rejected = statuses.count("rejected_by_skillopt_gate")
         decisions = accepted + rejected
+        disposition_counts = {
+            status: statuses.count(status)
+            for status in (
+                "accepted_by_skillopt_gate",
+                "rejected_by_skillopt_gate",
+                "applied_gate_off_ablation",
+                "invalid_proposal",
+                "no_op_proposal",
+                "optimizer_error",
+                "gate_execution_error",
+            )
+        }
         return {
             "value": accepted / decisions if decisions else None,
             "accepted_by_private_gate": accepted,
             "rejected_by_private_gate": rejected,
             "private_gate_decisions": decisions,
+            "num_updates": len(statuses),
+            "disposition_counts": disposition_counts,
+            "disposition_rates": {
+                status: count / len(statuses) if statuses else None
+                for status, count in disposition_counts.items()
+            },
         }
 
 
@@ -193,6 +211,22 @@ class CrossHarnessTransferDeltaMetric:
         }
 
 
+@dataclass(frozen=True)
+class RoleSeparatedSpendMetric:
+    """Report target and optimizer spend without an ambiguous combined total."""
+
+    name: str = "role_separated_spend"
+
+    def compute(self, records: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+        del config
+        target = [row for row in records if row.get("mode") != "update"]
+        optimizer = [row for row in records if row.get("mode") == "update"]
+        return {
+            "target": _spend_stats(target),
+            "optimizer": _spend_stats(optimizer),
+        }
+
+
 def _external_transfer_delta(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -255,6 +289,27 @@ def _scores_by_view(
         if row.get("baseline_role") in roles and score is not None:
             grouped[str(row.get("view_name") or "unknown")].append(score)
     return grouped
+
+
+def _spend_stats(records: Sequence[Mapping[str, Any]]) -> dict[str, float | int]:
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cost_usd",
+        "tool_calls",
+        "wall_time",
+    )
+    totals = {field: 0.0 for field in fields}
+    for row in records:
+        cost = row.get("cost")
+        if not isinstance(cost, Mapping):
+            continue
+        for field in fields:
+            value = _finite_number(cost.get(field))
+            if value is not None and value >= 0:
+                totals[field] += value
+    return {"num_records": len(records), **totals}
 
 
 def _task_evidence(

@@ -22,6 +22,14 @@ def test_production_matrix_configs_load_and_keep_first_run_serial() -> None:
         assert raw["backend"]["n_concurrent"] == 1
         assert "correct_speedup_geomean" in raw["metrics"]["primary"]
         assert "reliability_rates" in raw["metrics"]["primary"]
+        assert "role_separated_spend" in raw["metrics"]["primary"]
+        assert raw["metrics"]["cost"] == []
+        assert all(
+            Path(task.source["dataset_path"])
+            .as_posix()
+            .endswith("data/holoskill-codeopt-v1/observer")
+            for task in context.task_index.tasks.values()
+        )
 
 
 def test_matrix_conditions_preserve_gate_and_transfer_semantics() -> None:

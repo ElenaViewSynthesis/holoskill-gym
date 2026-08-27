@@ -70,8 +70,10 @@ def test_completed_run_has_normalized_verifier_and_optimizer_cost_records(comple
     assert metrics["forbidden_edit_rate"]["value"] == 0.0
     assert metrics["reliability_rates"]["timeout_or_infra_failure_rate"] == 0.0
     assert metrics["correct_speedup_geomean"]["num_correct_runs"] > 0
-    assert metrics["tokens"]["rollout"]["total_tokens"] == 0.0
-    assert metrics["tokens"]["update"]["total_tokens"] == 30.0
+    assert "tokens" not in metrics
+    assert metrics["role_separated_spend"]["target"]["total_tokens"] == 0.0
+    assert metrics["role_separated_spend"]["optimizer"]["total_tokens"] == 30.0
+    assert "overall" not in metrics["role_separated_spend"]
 
 
 def test_checkpoint_eval_never_invokes_optimizer_or_baseline_update(

@@ -30,7 +30,8 @@
     "final_test_views": [{"name": "id_test", "source_split": "test"}]
   },
   "metrics": {
-    "primary": ["success_rate", "final_gain", "forgetting_rate", "correct_speedup_geomean", "candidate_acceptance_rate", "gate_off_application_rate", "forbidden_edit_rate", "reliability_rates", "p95_performance_change", "cross_harness_transfer_delta"],
+    "primary": ["success_rate", "final_gain", "forgetting_rate", "correct_speedup_geomean", "candidate_acceptance_rate", "gate_off_application_rate", "forbidden_edit_rate", "reliability_rates", "p95_performance_change", "cross_harness_transfer_delta", "role_separated_spend"],
+    "cost": [],
     "registry": [
       {"name": "correct_speedup_geomean", "type": "python", "import_path": "holoskill_gym.report_metrics:CorrectSpeedupGeomeanMetric"},
       {"name": "candidate_acceptance_rate", "type": "python", "import_path": "holoskill_gym.report_metrics:CandidateAcceptanceRateMetric"},
@@ -38,7 +39,8 @@
       {"name": "forbidden_edit_rate", "type": "python", "import_path": "holoskill_gym.report_metrics:ForbiddenEditRateMetric"},
       {"name": "reliability_rates", "type": "python", "import_path": "holoskill_gym.report_metrics:ReliabilityRatesMetric"},
       {"name": "p95_performance_change", "type": "python", "import_path": "holoskill_gym.report_metrics:P95PerformanceChangeMetric"},
-      {"name": "cross_harness_transfer_delta", "type": "python", "import_path": "holoskill_gym.report_metrics:CrossHarnessTransferDeltaMetric"}
+      {"name": "cross_harness_transfer_delta", "type": "python", "import_path": "holoskill_gym.report_metrics:CrossHarnessTransferDeltaMetric"},
+      {"name": "role_separated_spend", "type": "python", "import_path": "holoskill_gym.report_metrics:RoleSeparatedSpendMetric"}
     ]
   },
   "output": {"run_dir": "../../../results/runs/holoskill_claude_static"}

@@ -121,7 +121,9 @@ Registered SEAGym report metrics include:
 - cross-harness transfer delta.
 
 Target usage comes from ATIF/task rows. Optimizer usage comes from update rows.
-They are never summed into a single spend figure.
+Matrix configs disable SEAGym's combined `tokens.overall` output and register
+`role_separated_spend`, which has only `target` and `optimizer` branches. They
+are never summed into a single spend figure.
 
 ## Experiment matrix
 
