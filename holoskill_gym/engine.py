@@ -7,12 +7,12 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from .holo_backend import HoloBackend
 from .metrics import correctness_gated_performance
 from .schemas import (
     GateDecision,
     GateTaskScore,
     OptimizerUsage,
+    ProposalBackend,
     ProposalResponse,
     ReflectionRecord,
 )
@@ -95,7 +95,7 @@ class SkillOptHoloEngine:
 
     def __init__(
         self,
-        backend: HoloBackend,
+        backend: ProposalBackend,
         *,
         config: SkillOptEngineConfig | None = None,
         proposal_policy: ProposalPolicy | None = None,

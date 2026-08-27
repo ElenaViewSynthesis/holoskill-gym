@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -112,3 +112,26 @@ class GateDecision(StrictModel):
     candidate_score: float
     deployed_skill: str
     gate_task_ids: list[str]
+
+
+@runtime_checkable
+class ProposalBackend(Protocol):
+    """The contract an optimizer backend must satisfy to drive skill mutation.
+
+    Holo and Inkling are peers: either may fill the optimizer role, and the
+    engine is written against this protocol rather than against a concrete
+    provider. A backend is responsible for issuing one strict schema request
+    and returning a parsed proposal with its accounting record; semantic edit
+    policy is enforced locally afterwards regardless of which one is used.
+    """
+
+    @property
+    def config(self) -> BackendIdentity: ...
+
+    def propose(self, *, system: str, user: str) -> ProposalResponse: ...
+
+
+class BackendIdentity(Protocol):
+    """The identity fields every backend config exposes for checkpoint metadata."""
+
+    model: str
