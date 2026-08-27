@@ -55,5 +55,6 @@ apply_patch() {
 }
 
 apply_patch reference/seagym seagym-redaction-usage-keys.patch
+apply_patch reference/seagym seagym-final-resume-idempotence.patch
 
 exit "$status"

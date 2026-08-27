@@ -1,0 +1,31 @@
+diff --git a/seagym/trainers/loops.py b/seagym/trainers/loops.py
+index e08233b..8acab3b 100644
+--- a/seagym/trainers/loops.py
++++ b/seagym/trainers/loops.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ """Standard SEAGym update-validation training loop."""
+ 
+ from dataclasses import asdict, dataclass
++from pathlib import Path
+ 
+ from seagym.envs import TaskRunResult
+ from seagym.trainers.engine import EvaluationPoint, ExecutionEngine
+@@ -97,6 +98,18 @@ class UpdateValidationLoop:
+                 flush=True,
+             )
+ 
++            # A final checkpoint is a terminal state, not an invitation to
++            # append a second copy of final evaluation rows. Keeping this path
++            # a true no-op makes completed-run resume idempotent: committed
++            # updates, metrics, and reports remain byte-identical.
++            if Path(resume.checkpoint_id).name == "final":
++                print(
++                    "seagym progress: final checkpoint already complete; "
++                    "no training or evaluation work remains",
++                    flush=True,
++                )
++                return
++
+         last_epoch_checkpoint_id: str | None = None
+         for step, batch in enumerate(train_batches, start=1):
+             if step <= start_after_batch:
