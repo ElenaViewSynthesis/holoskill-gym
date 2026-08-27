@@ -23,6 +23,9 @@ DEFAULT_HOLO_BASE_URL = "https://api.hcompany.ai/v1"
 DEFAULT_HOLO_MODEL = "holo3-1-35b-a3b"
 HOLO_35B_MAX_OUTPUT_TOKENS = 4_096
 DEFAULT_PROPOSAL_MAX_TOKENS = 3_000
+DEFAULT_MAX_ATTEMPTS = 6
+DEFAULT_INITIAL_BACKOFF_SECONDS = 6.0
+DEFAULT_MAX_BACKOFF_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -34,9 +37,9 @@ class HoloBackendConfig:
     model: str = DEFAULT_HOLO_MODEL
     max_completion_tokens: int = DEFAULT_PROPOSAL_MAX_TOKENS
     timeout_seconds: float = 120.0
-    max_attempts: int = 3
-    initial_backoff_seconds: float = 0.5
-    max_backoff_seconds: float = 4.0
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS
+    initial_backoff_seconds: float = DEFAULT_INITIAL_BACKOFF_SECONDS
+    max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
@@ -63,7 +66,9 @@ class HoloBackendConfig:
         model: str | None = None,
         max_completion_tokens: int = DEFAULT_PROPOSAL_MAX_TOKENS,
         timeout_seconds: float = 120.0,
-        max_attempts: int = 3,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        initial_backoff_seconds: float = DEFAULT_INITIAL_BACKOFF_SECONDS,
+        max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
     ) -> HoloBackendConfig:
         api_key = (os.environ.get("HAI_API_KEY") or "").strip()
         if not api_key:
@@ -79,6 +84,8 @@ class HoloBackendConfig:
             max_completion_tokens=max_completion_tokens,
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
         )
 
 
@@ -165,13 +172,17 @@ class HoloBackend:
         model: str | None = None,
         max_completion_tokens: int = DEFAULT_PROPOSAL_MAX_TOKENS,
         timeout_seconds: float = 120.0,
-        max_attempts: int = 3,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        initial_backoff_seconds: float = DEFAULT_INITIAL_BACKOFF_SECONDS,
+        max_backoff_seconds: float = DEFAULT_MAX_BACKOFF_SECONDS,
     ) -> HoloBackend:
         config = HoloBackendConfig.from_env(
             model=model,
             max_completion_tokens=max_completion_tokens,
             timeout_seconds=timeout_seconds,
             max_attempts=max_attempts,
+            initial_backoff_seconds=initial_backoff_seconds,
+            max_backoff_seconds=max_backoff_seconds,
         )
         configure_skillopt_holo(config)
         return cls(config)

@@ -94,7 +94,9 @@ class SkillOptHoloBaseline(BaseBaseline):
                 model=str(config.get("optimizer_model") or "holo3-1-35b-a3b"),
                 max_completion_tokens=int(config.get("max_completion_tokens", 3_000)),
                 timeout_seconds=float(config.get("optimizer_timeout_seconds", 120)),
-                max_attempts=int(config.get("optimizer_max_attempts", 3)),
+                max_attempts=int(config.get("optimizer_max_attempts", 6)),
+                initial_backoff_seconds=float(config.get("optimizer_initial_backoff_seconds", 6.0)),
+                max_backoff_seconds=float(config.get("optimizer_max_backoff_seconds", 30.0)),
             )
         else:
             raise ValueError(f"unsupported optimizer_backend: {optimizer_backend}")

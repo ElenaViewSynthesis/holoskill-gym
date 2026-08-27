@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from holoskill_gym.holo_backend import (
+    DEFAULT_INITIAL_BACKOFF_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
+    DEFAULT_MAX_BACKOFF_SECONDS,
     HoloAuthenticationError,
     HoloBackend,
     HoloBackendConfig,
@@ -112,6 +115,22 @@ def test_propose_uses_strict_schema_without_tools_or_reasoning_effort() -> None:
 def test_backend_rejects_non_35b_holo_models() -> None:
     with pytest.raises(ValueError, match="35B-only"):
         config(model="holo3-122b-a10b")
+
+
+def test_production_retry_defaults_wait_through_rate_limit_bursts() -> None:
+    production = HoloBackendConfig(api_key="not-a-real-secret")
+
+    assert production.max_attempts == DEFAULT_MAX_ATTEMPTS == 6
+    assert production.initial_backoff_seconds == DEFAULT_INITIAL_BACKOFF_SECONDS == 6.0
+    assert production.max_backoff_seconds == DEFAULT_MAX_BACKOFF_SECONDS == 30.0
+    backend = HoloBackend(production, client=FakeClient([]))
+    assert [backend._retry_delay(attempt) for attempt in range(1, 6)] == [
+        6.0,
+        12.0,
+        24.0,
+        30.0,
+        30.0,
+    ]
 
 
 def test_malformed_json_fails_safely() -> None:
