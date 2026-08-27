@@ -1,0 +1,15 @@
+{
+  "version": "holoskill-codeopt-private-gate-v1",
+  "tasks": [
+    {
+      "task_id": "codeopt-gate-001",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "data/holoskill-codeopt-v1/private_gate",
+        "task_name": "codeopt-gate-001"
+      },
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "hard"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"}
+    }
+  ]
+}

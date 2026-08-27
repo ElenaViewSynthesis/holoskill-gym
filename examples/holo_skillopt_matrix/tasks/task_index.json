@@ -1,0 +1,45 @@
+{
+  "version": "holoskill-codeopt-v1",
+  "tasks": [
+    {
+      "task_id": "codeopt-train-001",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "data/holoskill-codeopt-v1/observer",
+        "task_name": "codeopt-train-001"
+      },
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "medium"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"}
+    },
+    {
+      "task_id": "codeopt-train-002",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "data/holoskill-codeopt-v1/observer",
+        "task_name": "codeopt-train-002"
+      },
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "medium"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"}
+    },
+    {
+      "task_id": "codeopt-val-001",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "data/holoskill-codeopt-v1/observer",
+        "task_name": "codeopt-val-001"
+      },
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "hard"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"}
+    },
+    {
+      "task_id": "codeopt-test-001",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "data/holoskill-codeopt-v1/observer",
+        "task_name": "codeopt-test-001"
+      },
+      "attributes": {"domain": "code", "task_type": "optimization", "difficulty": "hard"},
+      "scoring": {"main_reward_key": "reward", "success_threshold": 1.0, "score_transform": "binary_threshold"}
+    }
+  ]
+}

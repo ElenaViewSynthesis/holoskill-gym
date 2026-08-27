@@ -1,0 +1,10 @@
+{
+  "split_id": "holoskill_codeopt_production_v1",
+  "split_version": "v1",
+  "seed": 42,
+  "splits": {
+    "train": ["codeopt-train-001", "codeopt-train-002"],
+    "val": ["codeopt-val-001"],
+    "test": ["codeopt-test-001"]
+  }
+}

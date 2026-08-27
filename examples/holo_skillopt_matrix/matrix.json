@@ -1,0 +1,45 @@
+{
+  "schema_version": "holoskill-experiment-matrix-v1",
+  "first_run_n_concurrent": 1,
+  "conditions": [
+    {
+      "id": "codex_gated",
+      "config": "configs/codex_gated.json",
+      "kind": "primary"
+    },
+    {
+      "id": "claude_gated",
+      "config": "configs/claude_gated.json",
+      "kind": "primary"
+    },
+    {
+      "id": "codex_static",
+      "config": "configs/codex_static.json",
+      "kind": "static_control"
+    },
+    {
+      "id": "claude_static",
+      "config": "configs/claude_static.json",
+      "kind": "static_control"
+    },
+    {
+      "id": "codex_gate_off",
+      "config": "configs/codex_gate_off.json",
+      "kind": "gate_off_ablation"
+    },
+    {
+      "id": "codex_to_claude",
+      "config": "configs/codex_to_claude_transfer.json",
+      "kind": "cross_harness_transfer",
+      "run_mode": "eval_only",
+      "source_condition": "codex_gated"
+    },
+    {
+      "id": "claude_to_codex",
+      "config": "configs/claude_to_codex_transfer.json",
+      "kind": "cross_harness_transfer",
+      "run_mode": "eval_only",
+      "source_condition": "claude_gated"
+    }
+  ]
+}

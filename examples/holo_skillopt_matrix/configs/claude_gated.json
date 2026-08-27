@@ -1,0 +1,58 @@
+{
+  "experiment_id": "holoskill_claude_gated",
+  "description": "Primary SkillOpt/Holo condition with Harbor Claude Code rollouts.",
+  "seed": 42,
+  "task_dataset": {"path": "../tasks/task_index.json", "version": "holoskill-codeopt-v1"},
+  "split_manifest": {"path": "../splits/split.json", "split_id": "holoskill_codeopt_production_v1"},
+  "schedule": {"train_size": 2, "val_size": 1, "test_size": 1, "batch_size": 1, "num_epochs": 1, "num_updates_per_batch": 1},
+  "dataloader": {"shuffle_train": false, "drop_last": false},
+  "backend": {"name": "harbor", "env": "docker", "n_concurrent": 1, "agent_override_timeout_sec": 1200, "verifier_override_timeout_sec": 600},
+  "baseline": {
+    "name": "skillopt_holo",
+    "class_path": "holoskill_gym.baseline:SkillOptHoloBaseline",
+    "config": {
+      "initial_skill_path": "../skills/initial_skill.md",
+      "skillopt_gate_path": "../tasks/skillopt_gate.json",
+      "split_manifest_path": "../splits/split.json",
+      "optimizer_backend": "holo_openai_compatible",
+      "optimizer_model": "holo3-1-35b-a3b",
+      "optimizer_max_attempts": 6,
+      "optimizer_initial_backoff_seconds": 6.0,
+      "optimizer_max_backoff_seconds": 30.0,
+      "gate_mode": "on",
+      "gate_metric": "correctness_gated_performance",
+      "gate_no_regression": true,
+      "target_executor": "claude_code_exec"
+    }
+  },
+  "rollout_agent": {
+    "name": "claude-codeopt",
+    "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
+    "config": {"executor": "claude_code_exec", "model_ref": "rollout_model", "n_attempts": 1, "attempt_modes": ["train"]},
+    "models": {
+      "rollout_model": {
+        "model": "anthropic/claude-sonnet-5",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "exports": {"ANTHROPIC_API_KEY": "{api_key}"}
+      }
+    }
+  },
+  "evaluation_strategy": {
+    "update_validation": {"source_split": "val", "selection": "fixed_subset", "val_size": 1},
+    "replay": {"enabled": true, "frequency": 1, "source": "seen_train_tasks", "selection": "fixed_subset", "replay_size": 1},
+    "final_test_views": [{"name": "id_test", "source_split": "test"}]
+  },
+  "metrics": {
+    "primary": ["success_rate", "final_gain", "forgetting_rate", "correct_speedup_geomean", "candidate_acceptance_rate", "gate_off_application_rate", "forbidden_edit_rate", "reliability_rates", "p95_performance_change", "cross_harness_transfer_delta"],
+    "registry": [
+      {"name": "correct_speedup_geomean", "type": "python", "import_path": "holoskill_gym.report_metrics:CorrectSpeedupGeomeanMetric"},
+      {"name": "candidate_acceptance_rate", "type": "python", "import_path": "holoskill_gym.report_metrics:CandidateAcceptanceRateMetric"},
+      {"name": "gate_off_application_rate", "type": "python", "import_path": "holoskill_gym.report_metrics:GateOffApplicationRateMetric"},
+      {"name": "forbidden_edit_rate", "type": "python", "import_path": "holoskill_gym.report_metrics:ForbiddenEditRateMetric"},
+      {"name": "reliability_rates", "type": "python", "import_path": "holoskill_gym.report_metrics:ReliabilityRatesMetric"},
+      {"name": "p95_performance_change", "type": "python", "import_path": "holoskill_gym.report_metrics:P95PerformanceChangeMetric"},
+      {"name": "cross_harness_transfer_delta", "type": "python", "import_path": "holoskill_gym.report_metrics:CrossHarnessTransferDeltaMetric"}
+    ]
+  },
+  "output": {"run_dir": "../../../results/runs/holoskill_claude_gated"}
+}
