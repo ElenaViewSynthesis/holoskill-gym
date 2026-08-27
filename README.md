@@ -17,6 +17,7 @@ update.
 | [agents.md](agents.md) | Executor bindings: how SEAGym drives an agent it does not own, and how `HarborRolloutAgent` is subclassed |
 | [todo.md](todo.md) | Implementation roadmap for the production data plane, plus the deferred executor backlog |
 | [docs/skillopt_holo.md](docs/skillopt_holo.md) | Production architecture, evidence, verifier, metrics, experiment matrix, eval/resume, privacy, and limitations |
+| [docs/harbor.md](docs/harbor.md) | What Harbor is, installing it, and running a dataset or a single task package from the CLI |
 | [docs/verifiers-v1-harbor.md](docs/verifiers-v1-harbor.md) | Verifiers v1 to Harbor: taskset, reward, artifact and separate-grader contracts, and current parity gaps |
 | [docs/harbor-task-structure.md](docs/harbor-task-structure.md) | Harbor task authoring: single-step layout, agentic runtime policy, verifier placement and reward output |
 | [docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md) | Harbor's sequential multi-step task contract, documented as a future extension |
@@ -269,7 +270,13 @@ omitted here):
 }
 ```
 
-`holo3-1-35b-a3b` is the only Holo model used by this integration. It supports
+`holo3-1-35b-a3b` is the only **Holo** model used by this integration, and
+`HoloBackendConfig` rejects other Holo IDs. It is not the only optimizer:
+`optimizer_backend` selects between `holo_openai_compatible` and
+`inkling_openrouter`, which are alternatives filling the same role behind the
+`ProposalBackend` protocol. Inkling's parameters and defaults are documented in
+[docs/openrouter-inkling.md](docs/openrouter-inkling.md); it is not reachable
+yet, and fails closed rather than degrading. Holo supports
 both reasoning and tool calls. For the skill-mutation request specifically,
 the optimizer uses strict `SkillUpdateProposal` JSON output followed by local
 semantic validation. This keeps mutation deterministic and auditable; it is
@@ -402,8 +409,10 @@ fee; cost is token-based only.
 
 Two consequences are worth knowing before configuring a run:
 
-- `HOLO_OPTIMIZER_MODEL` must remain `holo3-1-35b-a3b`; configuration rejects
-  other Holo model IDs rather than silently changing model behavior.
+- `HOLO_OPTIMIZER_MODEL` must remain `holo3-1-35b-a3b` whenever the Holo
+  backend is selected; configuration rejects other Holo model IDs rather than
+  silently changing model behavior. Selecting a different *optimizer* is done
+  with `optimizer_backend`, not by changing this variable.
 - The model emits a reasoning preamble that counts against `max_tokens`.
   Budget at least ~256 completion tokens or the answer is cut off before it
   starts.

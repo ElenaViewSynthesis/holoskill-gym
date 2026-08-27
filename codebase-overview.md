@@ -165,10 +165,29 @@ same completion budget, so sizing `max_completion_tokens` is the only control.
 |---|---|---|---|
 | `holo3-1-35b-a3b` | yes, 10 req/min | yes | 4,096 |
 
-`HOLO_OPTIMIZER_MODEL` must be `holo3-1-35b-a3b`. The model supports reasoning
-and tools, but the mutation call uses strict `json_schema` followed by local
-semantic validation. Tool-assisted evidence gathering, if enabled later, is a
-separate read-only phase rather than an alternative patch format.
+Two optimizer backends are supported. They are alternatives, never both in
+one run, and `optimizer_backend` selects between them:
+
+| `optimizer_backend` | Model | Pinned by |
+|---|---|---|
+| `holo_openai_compatible` | `holo3-1-35b-a3b` | `HoloBackendConfig` rejects other IDs |
+| `inkling_openrouter` | `INKLING_MODEL`, default `thinkingmachines/inkling-small:free` | `INKLING_*` variables |
+
+The engine binds to the `ProposalBackend` protocol in `schemas.py`, not to a
+concrete provider, so the two are peers rather than a primary and a special
+case. Whichever is configured, the mutation call uses strict `json_schema`
+followed by the same local semantic validation, and tools are never sent.
+Tool-assisted evidence gathering, if enabled later, is a separate read-only
+phase rather than an alternative patch format.
+
+`HOLO_OPTIMIZER_MODEL` must still be `holo3-1-35b-a3b` when the Holo backend is
+selected; the 35B restriction is a property of that backend, not of the
+integration as a whole.
+
+Inkling is not yet reachable: OpenRouter answers `403 "only available on
+agentic harnesses"` to a direct call for the free Inkling model, so a run
+configured for it fails closed with `InklingAccessError` rather than producing
+a degraded proposal. See [docs/openrouter-inkling.md](docs/openrouter-inkling.md).
 
 This restriction is scoped to deterministic SkillOpt mutation. `scripts/holo`
 is a general-purpose terminal client, not an optimizer adapter, so it retains

@@ -287,6 +287,208 @@ features are currently supported and which parity gaps must remain fail-closed.
 
 ---
 
+## Production runtime integration — Harbor CLI, Docker, and credentials
+
+Complete these steps in order. Harbor and Docker are trusted execution
+dependencies; provider checks may spend tokens and therefore come only after
+credential-free task validation. Keep `backend.n_concurrent: 1` until the
+single-task gated canary has produced a valid ATIF record, verifier result, and
+role-separated cost report.
+
+### A. Install and pin the Harbor CLI in the project environment
+
+- [ ] Initialize the Harbor checkout at the revision pinned through SEAGym and
+      record both the SEAGym and nested Harbor SHAs in the production run
+      manifest. Do not install an unrelated global Harbor build: SEAGym and the
+      `harbor` command must use the same checked-in API version.
+- [ ] Install Harbor into `.venv-linux` alongside this project, SkillOpt, and
+      SEAGym, using the editable source already declared by `pyproject.toml`:
+
+      ```bash
+      uv venv --python 3.12 .venv-linux
+      UV_CACHE_DIR=/tmp/cua-holo-uv-cache uv pip install \
+        -e '.[dev]' \
+        -e 'reference/skillopt[dev]' \
+        -e 'reference/seagym[models]' \
+        -e reference/seagym/reference/harbor
+      ```
+
+- [ ] Verify command and import discovery from the same interpreter. The
+      printed import path must point inside this checkout, not a system package:
+
+      ```bash
+      .venv-linux/bin/harbor --help
+      .venv-linux/bin/python -c "import harbor; print(harbor.__file__)"
+      .venv-linux/bin/seagym inspect env
+      bash scripts/apply-vendor-patches --check
+      ```
+
+- [ ] Run `seagym inspect config` and `seagym inspect runtime` for every file
+      under `examples/holo_skillopt_matrix/configs/`. Treat a missing Harbor
+      executable, unresolved Harbor class, missing task path, incompatible
+      executor/model pair, or unsupported environment as a blocking preflight
+      failure.
+- [ ] Extend runtime inspection to report the resolved Harbor executable,
+      package path, pinned revision, selected environment provider, and built-in
+      agent name (`codex` or `claude-code`) without reporting environment values
+      or credentials.
+
+**Harbor CLI exit criterion:** the pinned CLI imports from `.venv-linux`, all
+matrix configs load, runtime inspection resolves both built-in agents, and no
+credentialed API call has been made.
+
+### B. Provision and validate the Docker execution provider
+
+- [ ] Install Docker Engine, or enable Docker Desktop's WSL integration for
+      this distribution. Ensure the user running SEAGym can reach the daemon
+      without embedding `sudo` in experiment commands or granting the task
+      containers access to the host Docker socket.
+- [ ] Validate the client, daemon, image pull, container start, and cleanup
+      path before invoking Harbor:
+
+      ```bash
+      docker version
+      docker info
+      docker run --rm hello-world
+      ```
+
+- [ ] Build one checked-in task image locally and retain the build log as a
+      run artifact. Confirm that the image contains only task inputs and does
+      not copy `.env`, Git credentials, provider profiles, or host paths into
+      the build context.
+- [ ] Run the task's checked-in oracle solution through Harbor and Docker with
+      no model credentials:
+
+      ```bash
+      .venv-linux/bin/harbor run \
+        -p data/holoskill-codeopt-v1/observer/codeopt-train-001 \
+        -e docker \
+        -a oracle \
+        --n-concurrent 1 \
+        -y
+      ```
+
+- [ ] Repeat the oracle run for every observer and private-gate task. Require a
+      valid verifier reward, canonical ATIF, collected artifacts, and clean
+      container teardown for each package. A build, launch, timeout, collection,
+      or verifier infrastructure failure must not be recorded as reward zero.
+- [ ] Confirm that task network policy, CPU/memory/storage limits, agent and
+      verifier timeouts, process-group termination, and separate-verifier mode
+      resolve as declared. Inspect `docker ps` after forced timeout tests and
+      require that no task or sidecar container remains running.
+- [ ] Add a Docker-capable CI or dedicated runner job for the oracle pass. Keep
+      the ordinary unit-test job credential-free and able to run without a
+      daemon.
+
+**Docker exit criterion:** every checked-in Harbor task passes with the oracle
+agent at concurrency one, failure-path containers are removed, and no provider
+credential was present in a container or artifact.
+
+### C. Establish one provider-credential loading contract
+
+- [ ] Store local secrets in the ignored root `.env` only for development, or
+      inject them from the production runner's secret manager. Never commit
+      `.env`, print its contents, pass keys as command-line arguments, enable
+      shell tracing around secret setup, or copy a credential file into a task
+      image.
+- [ ] Fix credential loading before the first production run. The current Holo
+      baseline resolves its default `.env` relative to the config directory,
+      and the static baseline does not load dotenv at all. Add one common,
+      tested load step before baseline and rollout-agent construction, or set an
+      explicit absolute/portable `env_file` contract that also covers static and
+      checkpoint-eval runs. Do not rely on the caller's current directory or an
+      already-exported interactive shell.
+- [ ] Validate only the credentials required by the selected condition and
+      fail before Harbor starts if one is absent or still a placeholder:
+
+      | Condition | Required secret inputs |
+      |---|---|
+      | Codex gated or Codex gate-off | `HAI_API_KEY`, `OPENAI_API_KEY` |
+      | Claude Code gated | `HAI_API_KEY`, `ANTHROPIC_API_KEY` |
+      | Codex static control | `OPENAI_API_KEY` only |
+      | Claude Code static control | `ANTHROPIC_API_KEY` only |
+      | Codex-to-Claude transfer eval | `ANTHROPIC_API_KEY` plus the frozen source checkpoint |
+      | Claude-to-Codex transfer eval | `OPENAI_API_KEY` plus the frozen source checkpoint |
+
+      `OPENAI_PROJECT_ID` and `OPENAI_ORG_ID` remain optional routing metadata.
+      `HOLO_BASE_URL`, `OPENAI_BASE_URL`, and model IDs are configuration, not
+      secrets, but their resolved values must be recorded for reproducibility.
+
+- [ ] Prove optimizer isolation: `HAI_API_KEY` must be visible only to the Holo
+      proposal process and must never appear in `HarborAgentSpec.agent_env`, a
+      Docker build argument, task environment, ATIF, captured subprocess output,
+      checkpoint, or report.
+- [ ] Prove target isolation: export only `OPENAI_API_KEY` to Codex tasks or only
+      `ANTHROPIC_API_KEY` to Claude Code tasks. The private verifier receives no
+      provider credential unless its own declared environment explicitly needs
+      one.
+- [ ] Add safe credential-presence diagnostics that print role, source, and
+      status (`present`, `missing`, or `placeholder`) but never length, prefix,
+      suffix, hash, or value. Add regression tests for exception, dataclass
+      `repr`, subprocess environment, logs, ATIF, checkpoints, and reports.
+
+**Credential exit criterion:** each condition fails closed before container
+startup when its required key is missing, irrelevant role keys are not
+forwarded, and artifact secret scans remain clean.
+
+### D. Add automated runtime and provider preflights
+
+- [ ] Extend `holoskill_gym.preflight` with non-spending `--harbor` and
+      `--docker` checks. Add `--target codex` and `--target claude-code` modes
+      that validate configuration and credential presence without calling a
+      provider; require a separate explicit flag for a billable network canary.
+- [ ] Keep `python -m holoskill_gym.preflight --optimizer --structured` as the
+      one-request Holo authentication check. Run it only after local Harbor and
+      oracle-Docker checks pass; its structured output must contain safe request
+      metadata but no key or provider response content.
+- [ ] Add a one-task static canary config per target executor. Run Codex and
+      Claude Code independently so authentication, sandbox launch, ATIF
+      validation, verifier execution, and target-only cost accounting can be
+      diagnosed without involving SkillOpt or Holo.
+- [ ] Mock command discovery, Docker responses, missing-daemon errors, missing
+      keys, placeholder keys, provider 401/403, rate limits, and timeouts in
+      unit tests. Keep default test and inspection paths network-free.
+- [ ] Make the combined production preflight emit a machine-readable manifest
+      containing boolean readiness by dependency and safe version/revision
+      metadata. It must exit nonzero if any dependency required by the selected
+      config is unavailable.
+
+**Preflight exit criterion:** one command can prove configuration, Harbor,
+Docker, task-package, and credential readiness before a paid rollout, while
+network canaries remain explicit and opt-in.
+
+### E. Stage the first paid run and then unlock the matrix
+
+- [ ] Run one target-only static canary for Codex, then one for Claude Code.
+      Validate agent identity, model identity, terminal status, verifier schema,
+      ATIF, artifact paths, target spend, and absence of optimizer spend.
+- [ ] Run one Holo optimizer preflight, then one gated update against a single
+      training task and the complete private-gate set. Keep concurrency one and
+      retain all safe diagnostics needed to distinguish provider, Docker,
+      Harbor, agent, verifier, and gate failures.
+- [ ] Require the gated canary to report target and optimizer tokens, wall time,
+      tool calls, and cost in separate namespaces with no combined total.
+      Confirm that every private-gate task returns a `GateTaskScore`, including
+      failures, and that gate-off application is not reported as acceptance.
+- [ ] Exercise checkpoint resume and frozen-checkpoint evaluation on the canary
+      run before increasing task count. Resume must not repeat a committed
+      update, and evaluation must not call reflection, Holo, or baseline update.
+- [ ] Scan the complete run directory for secrets and absolute host paths,
+      archive the preflight manifest and dependency revisions, then execute the
+      static controls, gated conditions, gate-off ablation, and transfer pair in
+      the order documented by `examples/holo_skillopt_matrix/matrix.json`.
+- [ ] Increase concurrency only after serialized runs are stable. Document the
+      chosen limit against provider rate limits and Harbor capacity, and rerun
+      timeout/process-group cleanup tests at that concurrency before adopting
+      it as a production default.
+
+**Production exit criterion:** both executor canaries and the single-update
+gated canary are reproducible, resume/eval invariants hold, cost roles remain
+separate, and the archived readiness manifest identifies the exact Harbor,
+Docker, task, model, and repository revisions used.
+
+---
+
 ## Deferred executor-extension backlog
 
 HoloSkill Gym freezes the executor during a run and evolves only the
