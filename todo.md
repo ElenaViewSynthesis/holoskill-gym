@@ -3,9 +3,11 @@
 The control plane is implemented: Holo can produce strict bounded proposals,
 SkillOpt owns the private acceptance gate, SEAGym remains a passive evaluator,
 checkpoint state is hash-verified, and Harbor selects Codex or Claude Code.
-The next milestone is to complete the production code-optimization data plane:
-real task execution, trustworthy verifier evidence, accurate accounting, and
-end-to-end integration coverage.
+The normalized evidence, strict verifier, fixture repositories, deterministic
+verification smoke, report metrics, experiment configs, and completed-final
+resume/eval lifecycle coverage are now implemented. The next milestone is to
+provision and execute trusted production Harbor tasks, then harden the
+remaining executor and durability edges.
 
 Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
@@ -40,12 +42,12 @@ Audit recorded on 2026-08-26:
   caused by LF-to-CRLF conversion. Representative source and documentation
   files match their pinned Git blobs after removing carriage returns; no
   vendored file was normalized or reset.
-- Superseded on 2026-08-26 for `reference/seagym` only. One deliberate patch is
-  now applied to the pinned checkout, `patches/seagym-redaction-usage-keys.patch`,
-  because SEAGym's `redact_sensitive()` matches `TOKEN` as a substring and so
-  replaced token *counts* with `<redacted>` in run records. The patch is applied
+- Superseded for `reference/seagym` only. Two deliberate patches are applied to
+  the pinned checkout: `patches/seagym-redaction-usage-keys.patch` preserves
+  numeric token telemetry, and `patches/seagym-final-resume-idempotence.patch`
+  prevents duplicate final evaluation on completed-run resume. Both are applied
   by `scripts/apply-vendor-patches`, never committed into the submodule, and the
-  pin stays `9e61e14`. Proposed upstream as
+  pin stays `9e61e14`. The redaction fix was proposed upstream as
   [SEAGym#2](https://github.com/antropy-research/SEAGym/pull/2); drop the patch
   and move the pin once it lands.
 - SEAGym's `reference/ace`, `reference/agentic-harness-engineering`,
@@ -61,29 +63,29 @@ contracts that the normalized evidence layer must preserve. The runtime fields
 and trust boundaries are catalogued in
 [Harbor task and agentic-environment structure](docs/harbor-task-structure.md).
 
-- [ ] Add a dedicated normalized trajectory/verifier layer, for example
+- [x] Add a dedicated normalized trajectory/verifier layer, for example
       `holoskill_gym/trajectory.py` and `holoskill_gym/verifier.py`, that reads
       each Harbor trial's `result_path` and canonical ATIF trajectory.
-- [ ] Validate ATIF before consuming it and retain only bounded summaries plus
+- [x] Validate ATIF before consuming it and retain only bounded summaries plus
       local artifact paths. Put project-specific fields under
       `extra.holoskill_gym`; do not invent a second provider-specific transcript
       format or persist hidden reasoning content.
-- [ ] Normalize task ID, split/view, run/checkpoint/update IDs, executor and
+- [x] Normalize task ID, split/view, run/checkpoint/update IDs, executor and
       model identity, skill version and hashes, parent hash, repository commit,
       sanitized prompt, bounded tool/action summaries, exit status, timeout
       reason, and terminal status.
-- [ ] Normalize patch hash, changed-file list, diff statistics, correctness
+- [x] Normalize patch hash, changed-file list, diff statistics, correctness
       before/after, edit-policy and tampering checks, benchmark samples
       before/after, latency/throughput/memory aggregates, wall time, tool calls,
       target tokens/cost, and artifact paths.
-- [ ] Wire this normalized record into both SEAGym reporting and SkillOpt
+- [x] Wire this normalized record into both SEAGym reporting and SkillOpt
       reflection. `normalize_training_evidence()` currently reduces production
       trajectories to coarse success, score, reward, runtime, and error fields,
       so Holo cannot yet learn from the evidence described by the ATIF contract.
-- [ ] Support multiple attempts per task by aggregating or assigning stable
+- [x] Support multiple attempts per task by aggregating or assigning stable
       attempt-level evidence IDs. Do not reject a valid Harbor batch merely
       because several attempts share one task ID.
-- [ ] Replace whole-payload character slicing with deterministic per-record and
+- [x] Replace whole-payload character slicing with deterministic per-record and
       per-field evidence budgets so later records are not silently removed from
       the optimizer prompt.
 
@@ -97,31 +99,32 @@ sequential-task extension. The
 [Verifiers v1 Harbor bridge](docs/verifiers-v1-harbor.md) documents which Harbor
 features are currently supported and which parity gaps must remain fail-closed.
 
-- [ ] Integrate `CodeOptTask`, `verify_edit_policy()`, and the code-optimization
-      metrics with actual Harbor task materialization. These are currently
-      isolated utilities exercised only by unit tests.
-- [ ] Create a fresh isolated workspace for every task and checkout exactly the
+- [~] Integrate `CodeOptTask`, `verify_edit_policy()`, and code-optimization
+      metrics with Harbor task materialization. The production verifier drives
+      checked-in repositories and normalized smoke records, but trusted
+      production Harbor packages remain an external prerequisite.
+- [~] Create a fresh isolated workspace for every task and checkout exactly the
       pinned commit. Validate the source repository and record its resolved
       commit before the agent runs.
-- [ ] Run authoritative baseline correctness and benchmark commands before the
+- [x] Run authoritative baseline correctness and benchmark commands before the
       agent edits anything. Use repeated samples, deterministic warmup, robust
       central estimates, and a recorded noise measure where practical.
-- [ ] Install the checkpointed skill only through Harbor's task-local prompt or
+- [x] Install the checkpointed skill only through Harbor's task-local prompt or
       skill mechanism. Never mutate a user-global Codex or Claude directory.
-- [ ] Enforce protected files before final verification: tests, benchmarks,
+- [x] Enforce protected files before final verification: tests, benchmarks,
       task metadata, `.git`, verifier code, and configured forbidden globs must
       not be changed. Compute the patch from the pinned commit and run edit
       policy checks before final tests and benchmarks.
-- [ ] Disable task-workspace network access by default, set explicit agent and
+- [~] Disable task-workspace network access by default, set explicit agent and
       verifier timeouts, enforce maximum agent steps where the harness supports
       them, and rely on Harbor to terminate timed-out execution.
-- [ ] Return valid failed trajectories for agent, timeout, policy, test, and
+- [x] Return valid failed trajectories for agent, timeout, policy, test, and
       benchmark failures. Treat missing or broken infrastructure as an
       infrastructure error, never as an ordinary incorrect solution.
-- [ ] Add production Harbor task datasets and configs for Codex gated, Claude
+- [~] Add production Harbor task datasets and configs for Codex gated, Claude
       Code gated, Codex static control, Claude static control, and the gate-off
       ablation. Keep first-run concurrency at one.
-- [ ] Ship a neutral production initial skill of roughly 300–700 tokens. Keep
+- [x] Ship a neutral production initial skill of roughly 300–700 tokens. Keep
       the tiny deterministic skill as a smoke fixture rather than treating it
       as the production starting point.
 
@@ -146,29 +149,29 @@ features are currently supported and which parity gaps must remain fail-closed.
 
 ### 5. Correct gate metrics and cost accounting
 
-- [ ] Define a strict verifier-result schema with explicit
+- [x] Define a strict verifier-result schema with explicit
       `correctness_pass`, `edit_policy_pass`, `infra_valid`, benchmark samples,
       and infrastructure error fields. Do not infer correctness from the generic
       `trajectory.success` flag.
-- [ ] Make the private runtime gate consume those explicit verifier fields.
+- [x] Make the private runtime gate consume those explicit verifier fields.
       Missing, malformed, or non-finite results must produce
       `gate_execution_error`, not a candidate rejection or zero score.
-- [ ] Implement robust direction-aware speedup, latency/throughput/memory
+- [x] Implement robust direction-aware speedup, latency/throughput/memory
       deltas, benchmark coefficient of variation, regression indicators, and a
       bounded correctness-gated soft-score transform. Do not clip arbitrary raw
       speedups to `[0, 1]`, because that collapses distinct improvements.
-- [ ] Register the code-optimization metrics with SEAGym so observer views
+- [x] Register the code-optimization metrics with SEAGym so observer views
       independently compute the same underlying metrics without reading the
       SkillOpt gate decision as ground truth.
-- [ ] Expose optimizer usage in the update-cost structure recognized by
+- [x] Expose optimizer usage in the update-cost structure recognized by
       SEAGym. The current deterministic artifacts record optimizer tokens in
       method state while the generated `agent_update` token metric remains
       zero.
-- [ ] Persist target and optimizer usage/cost in separate namespaced records.
+- [x] Persist target and optimizer usage/cost in separate namespaced records.
       ATIF `final_metrics.total_cost_usd` must remain target-only; optimizer
       spend belongs to method/update state. Remove or rename any ambiguous
       aggregate that encourages the two roles to be conflated.
-- [ ] Report candidate acceptance, invalid proposal, no-op, optimizer failure,
+- [x] Report candidate acceptance, invalid proposal, no-op, optimizer failure,
       and gate infrastructure rates separately. Gate-off application must not
       be mislabeled as private-gate acceptance.
 
@@ -229,7 +232,7 @@ features are currently supported and which parity gaps must remain fail-closed.
 
 ### 8. Add deterministic integration and CI coverage
 
-- [ ] Add a pytest integration test that invokes `seagym train` against the
+- [x] Add a pytest integration test that invokes `seagym train` against the
       deterministic config in a temporary run directory and inspects all
       expected checkpoints, normalized records, update artifacts, metrics, and
       reports.
@@ -237,25 +240,24 @@ features are currently supported and which parity gaps must remain fail-closed.
       invalid proposal, a regressing proposal rejected by the gate, and an
       intentional no-op. Assert deployed bytes and status attribution after
       every update.
-- [ ] Verify `seagym eval --checkpoint ...` never calls SkillOpt reflection,
+- [x] Verify `seagym eval --checkpoint ...` never calls SkillOpt reflection,
       Holo proposal generation, or baseline update.
-- [ ] Resume from an intermediate and a final checkpoint. Assert committed
-      updates are not repeated and that final state, deployed skill, metrics,
-      and reports are byte-identical to the uninterrupted run where stable
-      timestamps are excluded or normalized.
-- [ ] Exercise fake Codex and Claude executables, including non-interactive
+- [~] Resume from an intermediate and a final checkpoint. Completed-final
+      resume is integration-tested as idempotent; intermediate trainer recovery
+      remains open. Assert committed updates are not repeated and that final
+      state, deployed skill, metrics, and reports are byte-identical.
+- [~] Exercise fake Codex and Claude executables, including non-interactive
       launch, bounded stdout/stderr, timeout, process-group termination, and
       failed-trajectory normalization, without requiring real credentials or
       network access.
-- [ ] Validate generated ATIF with Harbor's validator and assert all
+- [x] Validate generated ATIF with Harbor's validator and assert all
       HoloSkill-specific extensions live under `extra.holoskill_gym`.
-- [ ] Run config and runtime inspection for deterministic and production
+- [~] Run config and runtime inspection for deterministic and production
       configs in CI. Test that unsupported executor settings fail instead of
       being ignored.
-- [ ] Give the deterministic rollout an explicit fake identity. The current
-      fixture uses the deterministic environment but reports the agent as
-      `codex`, which makes smoke reports misleading.
-- [ ] Add report assertions for separate correctness, performance, reliability,
+- [x] Give the deterministic rollout an explicit fake identity. The fixture
+      reports `deterministic-codeopt-fixture`, never Codex or Claude Code.
+- [~] Add report assertions for separate correctness, performance, reliability,
       target cost, optimizer cost, forgetting, and candidate disposition. Also
       assert reports never claim SEAGym accepted or rejected a proposal.
 - [ ] Add CI commands for root pytest, Ruff, deterministic training, checkpoint
@@ -263,21 +265,21 @@ features are currently supported and which parity gaps must remain fail-closed.
 
 ### 9. Documentation, production evaluation, and deferred extensions
 
-- [ ] Add `docs/skillopt_holo.md` covering architecture, method/evaluator
+- [x] Add `docs/skillopt_holo.md` covering architecture, method/evaluator
       boundaries, split policy, installation, credentials, task schema,
       executor setup, metric definitions, artifacts, resume/eval commands,
       privacy, troubleshooting, and known limitations.
-- [ ] Keep the main README concise and link to the detailed guide. Clearly mark
+- [x] Keep the main README concise and link to the detailed guide. Clearly mark
       the ATIF mapping and production experiment matrix as implemented only
       after their corresponding code and tests land.
 - [ ] Run the production Codex and Claude gated/static experiments only after
       credentials, CLIs, Harbor capacity, and trusted code-optimization tasks
       are explicitly available. Record unexecuted external prerequisites rather
       than simulating success.
-- [ ] After the production data plane and integration tests are complete, add
-      cross-harness transfer evaluation: evolve with Codex and evaluate the
-      frozen skill on Codex and Claude Code, then repeat with Claude Code as the
-      evolution harness. Never update the skill during transfer evaluation.
+- [~] Cross-harness transfer configs and frozen-skill eval support are present:
+      evolve with Codex and evaluate on Claude Code, then reverse the direction.
+      Trusted production runs remain unexecuted until their external
+      prerequisites are available; transfer eval never updates skill.
 - [ ] Defer Claude Agent SDK and OpenAI Agents SDK executors until the CLI MVP,
       verifier, accounting, privacy, and cross-harness evaluation paths are
       complete. Additional harnesses should reuse the same normalized evidence

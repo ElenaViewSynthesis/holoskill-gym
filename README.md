@@ -16,6 +16,7 @@ update.
 | [codebase-overview.md](codebase-overview.md) | How the vendored pieces connect, and the plain OpenAI client pointed at the H base URL |
 | [agents.md](agents.md) | Executor bindings: how SEAGym drives an agent it does not own, and how `HarborRolloutAgent` is subclassed |
 | [todo.md](todo.md) | Implementation roadmap for the production data plane, plus the deferred executor backlog |
+| [docs/skillopt_holo.md](docs/skillopt_holo.md) | Production architecture, evidence, verifier, metrics, experiment matrix, eval/resume, privacy, and limitations |
 | [docs/verifiers-v1-harbor.md](docs/verifiers-v1-harbor.md) | Verifiers v1 to Harbor: taskset, reward, artifact and separate-grader contracts, and current parity gaps |
 | [docs/harbor-task-structure.md](docs/harbor-task-structure.md) | Harbor task authoring: single-step layout, agentic runtime policy, verifier placement and reward output |
 | [docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md) | Harbor's sequential multi-step task contract, documented as a future extension |
@@ -47,6 +48,7 @@ what is missing without writing anything.
 | Patch | Target | Why | Upstream |
 |---|---|---|---|
 | `seagym-redaction-usage-keys.patch` | `reference/seagym` | `redact_sensitive()` matches `TOKEN` as a substring, so token *counts* such as `total_tokens` were written to run records as `<redacted>` | [SEAGym#2](https://github.com/antropy-research/SEAGym/pull/2) |
+| `seagym-final-resume-idempotence.patch` | `reference/seagym` | Resuming an already-complete final checkpoint appended duplicate final evaluation rows and changed metrics | local pending upstream proposal |
 
 Retire a patch by moving the submodule pin to a commit that already contains
 the fix, then deleting the file.
@@ -86,6 +88,13 @@ rollouts map `codex_exec` to Harbor's built-in Codex agent (configured with
 Holo remains the optimizer role; target and optimizer usage are recorded
 separately.
 
+The production condition configs and neutral initial skill are committed under
+[`examples/holo_skillopt_matrix/`](examples/holo_skillopt_matrix/README.md).
+They cover gated and static Codex/Claude runs, gate-off, and both transfer
+directions with first-run concurrency fixed at one. Trusted Harbor task packages
+and credentials are explicit external prerequisites and have not been
+simulated or executed here.
+
 ## Commands
 
 Every command below is run from the repository root. Substitute your own config
@@ -120,9 +129,9 @@ seagym train <config.json> --resume-from-checkpoint epoch_0001
 `--resume-from-checkpoint` names one explicitly. Committed SkillOpt updates are
 not repeated on resume — `StateStore` rejects a duplicate update index.
 
-> Resume determinism is enforced by the state store but not yet covered by an
-> integration test (roadmap step 5). Treat a resumed production run as
-> unverified until that test lands.
+Completed-final resume is integration-tested: no update or metric-input row is
+repeated, and state, deployed skill, metrics, and the summary report stay
+byte-identical. Intermediate-checkpoint recovery remains a roadmap item.
 
 ### Evaluate a frozen checkpoint
 
@@ -164,10 +173,9 @@ mode records, no `agent_updates.jsonl`, and zero `agent_update` rows.
 Do not use `eval` for routine validation during training — the trainer already
 runs update-validation, replay and final views itself.
 
-> Spec section 21.9 requires that `eval` never reach the optimizer. That
-> property is currently structural, not tested (roadmap step 5). Until the test
-> exists, a bug here would spend Holo tokens and mutate skill state during what
-> should be a read-only measurement.
+An integration test replaces baseline update, SkillOpt reflection, and Holo
+proposal generation with fail-fast sentinels, then runs checkpoint eval. The
+eval completes with only `checkpoint_eval` records and no update artifact.
 
 ### Harbor tasks
 
