@@ -5,12 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from holoskill_gym.inkling_backend import (
-    DEFAULT_INKLING_MODEL,
-    InklingAccessError,
-    InklingBackend,
-    InklingBackendConfig,
-    InklingSampling,
+from holoskill_gym.openrouter_backend import (
+    DEFAULT_OPENROUTER_MODEL,
+    OpenRouterAccessError,
+    OpenRouterBackend,
+    OpenRouterBackendConfig,
+    OpenRouterSampling,
 )
 
 PROPOSAL = {
@@ -24,7 +24,7 @@ PROPOSAL = {
 def fake_response(content: str = json.dumps(PROPOSAL)):
     return SimpleNamespace(
         id="resp-1",
-        model=DEFAULT_INKLING_MODEL,
+        model=DEFAULT_OPENROUTER_MODEL,
         choices=[
             SimpleNamespace(
                 finish_reason="stop",
@@ -51,12 +51,12 @@ class RecordingClient:
         return self._response
 
 
-def config(**overrides) -> InklingBackendConfig:
-    return InklingBackendConfig(api_key="test-key", **overrides)
+def config(**overrides) -> OpenRouterBackendConfig:
+    return OpenRouterBackendConfig(api_key="test-key", **overrides)
 
 
 def test_defaults_are_deterministic_not_chat_defaults() -> None:
-    sampling = InklingSampling()
+    sampling = OpenRouterSampling()
 
     # OpenRouter defaults temperature to 1 and has no seed. An optimizer that
     # drives an accept/reject gate must be reproducible instead.
@@ -69,17 +69,19 @@ def test_defaults_are_deterministic_not_chat_defaults() -> None:
 
 
 def test_reasoning_payload_omits_unset_controls() -> None:
-    assert InklingSampling().reasoning_payload() == {"enabled": True, "effort": "medium"}
-    assert InklingSampling(reasoning_effort=None, reasoning_max_tokens=512).reasoning_payload() == {
+    assert OpenRouterSampling().reasoning_payload() == {"enabled": True, "effort": "medium"}
+    assert OpenRouterSampling(
+        reasoning_effort=None, reasoning_max_tokens=512
+    ).reasoning_payload() == {
         "enabled": True,
         "max_tokens": 512,
     }
-    assert InklingSampling(reasoning_effort=None).reasoning_payload() == {"enabled": True}
+    assert OpenRouterSampling(reasoning_effort=None).reasoning_payload() == {"enabled": True}
 
 
 def test_effort_and_max_tokens_are_mutually_exclusive() -> None:
     with pytest.raises(ValueError, match="not both"):
-        InklingSampling(reasoning_effort="high", reasoning_max_tokens=256)
+        OpenRouterSampling(reasoning_effort="high", reasoning_max_tokens=256)
 
 
 @pytest.mark.parametrize(
@@ -96,14 +98,14 @@ def test_effort_and_max_tokens_are_mutually_exclusive() -> None:
 )
 def test_out_of_range_parameters_fail_closed(kwargs) -> None:
     with pytest.raises(ValueError):
-        InklingSampling(**kwargs)
+        OpenRouterSampling(**kwargs)
 
 
 def test_every_parameter_reaches_the_request() -> None:
     client = RecordingClient()
-    backend = InklingBackend(
+    backend = OpenRouterBackend(
         config(
-            sampling=InklingSampling(
+            sampling=OpenRouterSampling(
                 temperature=0.3,
                 top_p=0.9,
                 max_tokens=1024,
@@ -133,8 +135,8 @@ def test_every_parameter_reaches_the_request() -> None:
 
 def test_seed_and_stop_are_omitted_when_unset() -> None:
     client = RecordingClient()
-    backend = InklingBackend(
-        config(sampling=InklingSampling(seed=None)),
+    backend = OpenRouterBackend(
+        config(sampling=OpenRouterSampling(seed=None)),
         client=client,
     )
 
@@ -146,7 +148,7 @@ def test_seed_and_stop_are_omitted_when_unset() -> None:
 
 def test_mutation_never_sends_tools() -> None:
     client = RecordingClient()
-    InklingBackend(config(), client=client).propose(system="sys", user="usr")
+    OpenRouterBackend(config(), client=client).propose(system="sys", user="usr")
 
     # Tool calling would be an alternative patch format; the mutation call is
     # strict json_schema plus local validation by policy.
@@ -156,9 +158,9 @@ def test_mutation_never_sends_tools() -> None:
 def test_forbidden_model_is_a_distinct_access_error() -> None:
     error = Exception("only available on agentic harnesses")
     error.status_code = 403  # type: ignore[attr-defined]
-    backend = InklingBackend(config(max_attempts=1), client=RecordingClient(error=error))
+    backend = OpenRouterBackend(config(max_attempts=1), client=RecordingClient(error=error))
 
-    with pytest.raises(InklingAccessError) as excinfo:
+    with pytest.raises(OpenRouterAccessError) as excinfo:
         backend.propose(system="sys", user="usr")
 
     details = excinfo.value.to_safe_dict()
@@ -169,13 +171,13 @@ def test_forbidden_model_is_a_distinct_access_error() -> None:
 
 
 def test_successful_proposal_records_usage() -> None:
-    backend = InklingBackend(config(), client=RecordingClient())
+    backend = OpenRouterBackend(config(), client=RecordingClient())
 
     result = backend.propose(system="sys", user="usr")
 
     assert result.proposal.edits == []
     assert result.call.usage.total_tokens == 18
-    assert result.call.model == DEFAULT_INKLING_MODEL
+    assert result.call.model == DEFAULT_OPENROUTER_MODEL
     assert len(backend.records) == 1
 
 
@@ -189,49 +191,49 @@ def test_headers_are_sent_only_when_configured() -> None:
 
 def test_empty_api_key_fails_closed() -> None:
     with pytest.raises(ValueError, match="api_key"):
-        InklingBackendConfig(api_key="   ")
+        OpenRouterBackendConfig(api_key="   ")
 
 
 def test_cli_defaults_match_the_dataclass_defaults() -> None:
     import argparse
 
-    from holoskill_gym.inkling_backend import add_sampling_arguments, sampling_from_args
+    from holoskill_gym.openrouter_backend import add_sampling_arguments, sampling_from_args
 
     parser = add_sampling_arguments(argparse.ArgumentParser())
 
     # The command line is the source of truth for these knobs, so its defaults
     # must not drift from the library's.
-    assert sampling_from_args(parser.parse_args([])) == InklingSampling()
+    assert sampling_from_args(parser.parse_args([])) == OpenRouterSampling()
 
 
 def test_cli_overrides_every_sampling_parameter() -> None:
     import argparse
 
-    from holoskill_gym.inkling_backend import add_sampling_arguments, sampling_from_args
+    from holoskill_gym.openrouter_backend import add_sampling_arguments, sampling_from_args
 
     parser = add_sampling_arguments(argparse.ArgumentParser())
     sampling = sampling_from_args(
         parser.parse_args(
             [
-                "--inkling-temperature",
+                "--openrouter-temperature",
                 "0.7",
-                "--inkling-top-p",
+                "--openrouter-top-p",
                 "0.8",
-                "--inkling-max-tokens",
+                "--openrouter-max-tokens",
                 "256",
-                "--inkling-seed",
+                "--openrouter-seed",
                 "9",
-                "--inkling-frequency-penalty",
+                "--openrouter-frequency-penalty",
                 "0.25",
-                "--inkling-presence-penalty",
+                "--openrouter-presence-penalty",
                 "-0.25",
-                "--inkling-stop",
+                "--openrouter-stop",
                 "END",
-                "--inkling-stop",
+                "--openrouter-stop",
                 "STOP",
-                "--inkling-reasoning-effort",
+                "--openrouter-reasoning-effort",
                 "high",
-                "--inkling-reasoning-exclude",
+                "--openrouter-reasoning-exclude",
             ]
         )
     )
@@ -250,19 +252,19 @@ def test_cli_overrides_every_sampling_parameter() -> None:
 def test_cli_can_unset_seed_and_effort() -> None:
     import argparse
 
-    from holoskill_gym.inkling_backend import add_sampling_arguments, sampling_from_args
+    from holoskill_gym.openrouter_backend import add_sampling_arguments, sampling_from_args
 
     parser = add_sampling_arguments(argparse.ArgumentParser())
 
-    assert sampling_from_args(parser.parse_args(["--no-inkling-seed"])).seed is None
+    assert sampling_from_args(parser.parse_args(["--no-openrouter-seed"])).seed is None
     payload = sampling_from_args(
         parser.parse_args(
-            ["--inkling-reasoning-effort", "none", "--inkling-reasoning-max-tokens", "512"]
+            ["--openrouter-reasoning-effort", "none", "--openrouter-reasoning-max-tokens", "512"]
         )
     ).reasoning_payload()
     assert payload == {"enabled": True, "max_tokens": 512}
     assert (
-        sampling_from_args(parser.parse_args(["--no-inkling-reasoning"])).reasoning_enabled is False
+        sampling_from_args(parser.parse_args(["--no-openrouter-reasoning"])).reasoning_enabled is False
     )
 
 
@@ -271,13 +273,13 @@ def test_sampling_parameters_are_not_read_from_the_environment(monkeypatch) -> N
     # value must not silently alter what a run produces.
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     for name, value in [
-        ("INKLING_TEMPERATURE", "1.9"),
-        ("INKLING_TOP_P", "0.1"),
-        ("INKLING_MAX_TOKENS", "17"),
-        ("INKLING_SEED", "999"),
-        ("INKLING_FREQUENCY_PENALTY", "1.5"),
-        ("INKLING_PRESENCE_PENALTY", "1.5"),
+        ("OPENROUTER_TEMPERATURE", "1.9"),
+        ("OPENROUTER_TOP_P", "0.1"),
+        ("OPENROUTER_MAX_TOKENS", "17"),
+        ("OPENROUTER_SEED", "999"),
+        ("OPENROUTER_FREQUENCY_PENALTY", "1.5"),
+        ("OPENROUTER_PRESENCE_PENALTY", "1.5"),
     ]:
         monkeypatch.setenv(name, value)
 
-    assert InklingBackendConfig.from_env().sampling == InklingSampling()
+    assert OpenRouterBackendConfig.from_env().sampling == OpenRouterSampling()

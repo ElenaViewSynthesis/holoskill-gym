@@ -99,14 +99,14 @@ class SkillOptHoloBaseline(BaseBaseline):
                 initial_backoff_seconds=float(config.get("optimizer_initial_backoff_seconds", 6.0)),
                 max_backoff_seconds=float(config.get("optimizer_max_backoff_seconds", 30.0)),
             )
-        elif optimizer_backend == "inkling_openrouter":
-            from .inkling_backend import InklingBackend, InklingSampling
+        elif optimizer_backend in {"openrouter", "inkling_openrouter"}:
+            from .openrouter_backend import OpenRouterBackend, OpenRouterSampling
 
-            backend = InklingBackend.from_env(
+            backend = OpenRouterBackend.from_env(
                 model=config.get("optimizer_model") or None,
-                sampling=InklingSampling(
+                sampling=OpenRouterSampling(
                     **{
-                        key: config[f"inkling_{key}"]
+                        key: config[f"openrouter_{key}"]
                         for key in (
                             "temperature",
                             "top_p",
@@ -119,10 +119,10 @@ class SkillOptHoloBaseline(BaseBaseline):
                             "reasoning_max_tokens",
                             "reasoning_exclude",
                         )
-                        if f"inkling_{key}" in config
+                        if f"openrouter_{key}" in config
                     }
                 )
-                if any(key.startswith("inkling_") for key in config)
+                if any(key.startswith("openrouter_") for key in config)
                 else None,
                 timeout_seconds=float(config.get("optimizer_timeout_seconds", 120)),
                 max_attempts=int(config.get("optimizer_max_attempts", 6)),
@@ -132,7 +132,7 @@ class SkillOptHoloBaseline(BaseBaseline):
         else:
             raise ValueError(
                 f"unsupported optimizer_backend: {optimizer_backend}; expected one of "
-                "holo_openai_compatible, inkling_openrouter, deterministic_fake"
+                "holo_openai_compatible, openrouter, deterministic_fake"
             )
         gate_metric = str(config.get("gate_metric", "soft"))
         if gate_metric not in {

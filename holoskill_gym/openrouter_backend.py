@@ -1,17 +1,33 @@
-"""Inkling optimizer backend reached through OpenRouter.
+"""OpenRouter optimizer backend, an alternative to Holo.
 
-A second optimizer option alongside :mod:`holoskill_gym.holo_backend`. Both
-satisfy the same narrow contract -- ``propose(system, user) -> ProposalResponse``
--- so :class:`~holoskill_gym.engine.SkillOptHoloEngine` is indifferent to which
-one is configured.
+Satisfies the same ``ProposalBackend`` contract as
+:mod:`holoskill_gym.holo_backend`, so the engine is indifferent to which is
+configured. The model is selected by ``OPENROUTER_MODEL``; the adapter itself
+is model-agnostic.
 
-Access caveat, verified 2026-08-27: ``thinkingmachines/inkling-small:free``
-answers ``403 "only available on agentic harnesses"`` to a direct API call, and
-attribution headers do not lift it. The key itself validates. This backend is
-therefore complete and configurable but cannot reach that model from a plain
-process until OpenRouter grants the caller access; the failure is classified as
-:class:`InklingAccessError` rather than surfacing as a malformed proposal.
-See ``docs/openrouter-inkling.md``.
+Model selection is not free. The mutation call requires strict
+``json_schema`` output, and most OpenRouter models do not support it. Verified
+against the live catalogue on 2026-08-28:
+
+===========================================  =========  ==============
+model                                        free       response_format
+===========================================  =========  ==============
+``z-ai/glm-5.2:free``                        yes        yes
+``nvidia/nemotron-3-super-120b-a12b:free``   yes        yes
+``thinkingmachines/inkling``                 no         yes
+``thinkingmachines/inkling:free``            yes        no
+``thinkingmachines/inkling-small:free``      yes        no
+===========================================  =========  ==============
+
+Advertised support is necessary, not sufficient: ``nemotron-3-super-120b``
+declares ``structured_outputs`` and still returned content failing schema
+validation, and ``glm-5.2:free`` exhausted six attempts on rate limiting.
+Local semantic validation runs regardless of which model is configured.
+
+The Inkling free variants additionally answer ``403 "only available on agentic
+harnesses"`` to any direct call, which :class:`OpenRouterAccessError`
+classifies distinctly so it fails closed rather than looking like a malformed
+proposal. See ``docs/openrouter-inkling.md``.
 """
 
 from __future__ import annotations
@@ -32,7 +48,26 @@ from .holo_backend import (
 from .schemas import OptimizerCallRecord, ProposalResponse, SkillUpdateProposal
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_INKLING_MODEL = "thinkingmachines/inkling-small:free"
+GLM_MODEL = "z-ai/glm-5.2:free"
+NEMOTRON_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+INKLING_PAID_MODEL = "thinkingmachines/inkling"
+INKLING_FREE_MODEL = "thinkingmachines/inkling:free"
+
+# GLM 5.2 is the default because it is the only free model in the catalogue
+# that both advertises structured outputs and accepts the request shape.
+# Models without response_format cannot fill the mutation role at all.
+DEFAULT_OPENROUTER_MODEL = GLM_MODEL
+
+# Models known to lack response_format; selecting one is a configuration
+# error rather than a runtime surprise.
+MODELS_WITHOUT_STRUCTURED_OUTPUT = frozenset(
+    {
+        "thinkingmachines/inkling:free",
+        "thinkingmachines/inkling-small:free",
+        "thinkingmachines/inkling-small",
+        "thinkingmachines/inkling:batch",
+    }
+)
 
 # Defaults chosen for a *deterministic optimizer*, not for chat. OpenRouter's
 # own defaults (temperature 1, no seed) are wrong for this role: the optimizer
@@ -55,14 +90,14 @@ ReasoningEffort = Literal["low", "medium", "high"]
 _VALID_EFFORTS = ("low", "medium", "high")
 
 
-class InklingAccessError(HoloBackendError):
+class OpenRouterAccessError(HoloBackendError):
     """Raised when OpenRouter refuses the model for this caller (HTTP 403)."""
 
     code = "model_access_denied"
 
 
 @dataclass(frozen=True)
-class InklingSampling:
+class OpenRouterSampling:
     """Generation parameters exposed by OpenRouter's chat completions API."""
 
     temperature: float = DEFAULT_TEMPERATURE
@@ -112,13 +147,13 @@ class InklingSampling:
 
 
 @dataclass(frozen=True)
-class InklingBackendConfig:
-    """Connection, retry, and sampling settings for the Inkling optimizer role."""
+class OpenRouterBackendConfig:
+    """Connection, retry, and sampling settings for the OpenRouter optimizer role."""
 
     api_key: str = field(repr=False)
     base_url: str = DEFAULT_OPENROUTER_BASE_URL
-    model: str = DEFAULT_INKLING_MODEL
-    sampling: InklingSampling = field(default_factory=InklingSampling)
+    model: str = DEFAULT_OPENROUTER_MODEL
+    sampling: OpenRouterSampling = field(default_factory=OpenRouterSampling)
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_attempts: int = DEFAULT_MAX_ATTEMPTS
     initial_backoff_seconds: float = DEFAULT_INITIAL_BACKOFF_SECONDS
@@ -128,11 +163,17 @@ class InklingBackendConfig:
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
-            raise ValueError("Inkling api_key must not be empty")
+            raise ValueError("OpenRouter api_key must not be empty")
         if not self.base_url.strip():
-            raise ValueError("Inkling base_url must not be empty")
+            raise ValueError("OpenRouter base_url must not be empty")
         if not self.model.strip():
-            raise ValueError("Inkling model must not be empty")
+            raise ValueError("OpenRouter model must not be empty")
+        if self.model in MODELS_WITHOUT_STRUCTURED_OUTPUT:
+            raise ValueError(
+                f"{self.model} does not support response_format and cannot "
+                "produce a strict SkillUpdateProposal; choose a model that "
+                f"does, for example {DEFAULT_OPENROUTER_MODEL}"
+            )
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
         if self.max_attempts <= 0:
@@ -149,12 +190,12 @@ class InklingBackendConfig:
         return headers
 
     @classmethod
-    def from_env(cls, **overrides: Any) -> InklingBackendConfig:
-        """Read configuration from OPENROUTER_* and INKLING_* variables."""
+    def from_env(cls, **overrides: Any) -> OpenRouterBackendConfig:
+        """Read connection settings from OPENROUTER_* variables."""
 
         api_key = (os.environ.get("OPENROUTER_API_KEY") or "").strip()
         if not api_key:
-            raise InklingAccessError(
+            raise OpenRouterAccessError(
                 "OPENROUTER_API_KEY is not set",
                 attempts=0,
                 latency_ms=0,
@@ -163,13 +204,13 @@ class InklingBackendConfig:
         # environment variables: they change what a run produces, so they
         # belong in the run's recorded configuration rather than in ambient
         # process state. See add_sampling_arguments().
-        sampling = overrides.pop("sampling", None) or InklingSampling()
+        sampling = overrides.pop("sampling", None) or OpenRouterSampling()
         defaults: dict[str, Any] = {
             "api_key": api_key,
             "base_url": (
                 os.environ.get("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE_URL
             ).rstrip("/"),
-            "model": os.environ.get("INKLING_MODEL") or DEFAULT_INKLING_MODEL,
+            "model": os.environ.get("OPENROUTER_MODEL") or DEFAULT_OPENROUTER_MODEL,
             "sampling": sampling,
             "http_referer": os.environ.get("OPENROUTER_HTTP_REFERER") or None,
             "x_title": os.environ.get("OPENROUTER_X_TITLE") or None,
@@ -178,12 +219,12 @@ class InklingBackendConfig:
         return cls(**defaults)
 
 
-class InklingBackend:
-    """Issue strict schema requests to Inkling through OpenRouter."""
+class OpenRouterBackend:
+    """Issue strict schema requests to a model served by OpenRouter."""
 
     def __init__(
         self,
-        config: InklingBackendConfig,
+        config: OpenRouterBackendConfig,
         *,
         client: Any | None = None,
         sleep: Callable[[float], None] = time.sleep,
@@ -197,8 +238,8 @@ class InklingBackend:
         self._records_lock = threading.Lock()
 
     @classmethod
-    def from_env(cls, **overrides: Any) -> InklingBackend:
-        return cls(InklingBackendConfig.from_env(**overrides))
+    def from_env(cls, **overrides: Any) -> OpenRouterBackend:
+        return cls(OpenRouterBackendConfig.from_env(**overrides))
 
     @property
     def records(self) -> tuple[OptimizerCallRecord, ...]:
@@ -254,7 +295,9 @@ class InklingBackend:
                 )
             except Exception as exc:
                 latency_ms = (self._clock() - started) * 1_000
-                normalized = _normalize_inkling_error(exc, attempts=attempt, latency_ms=latency_ms)
+                normalized = _normalize_openrouter_error(
+                    exc, attempts=attempt, latency_ms=latency_ms
+                )
                 if normalized.retryable and attempt < self.config.max_attempts:
                     self._sleep(self._retry_delay(attempt))
                     continue
@@ -280,14 +323,14 @@ class InklingBackend:
         )
 
 
-def _normalize_inkling_error(
+def _normalize_openrouter_error(
     exc: Exception, *, attempts: int, latency_ms: float
 ) -> HoloBackendError:
     """Classify 403 model-gating separately; defer everything else to Holo's map."""
 
     status = getattr(exc, "status_code", None)
     if status == 403:
-        return InklingAccessError(
+        return OpenRouterAccessError(
             "OpenRouter denied access to this model for this caller (HTTP 403). "
             "Some models are restricted to registered agentic harnesses; "
             "see docs/openrouter-inkling.md",
@@ -298,10 +341,10 @@ def _normalize_inkling_error(
     return _normalize_provider_error(exc, attempts=attempts, latency_ms=latency_ms)
 
 
-def add_sampling_arguments(parser: Any, *, prefix: str = "inkling") -> Any:
+def add_sampling_arguments(parser: Any, *, prefix: str = "openrouter") -> Any:
     """Register Inkling sampling and reasoning parameters on an argparse parser.
 
-    Defaults match :class:`InklingSampling` so the command line and the library
+    Defaults match :class:`OpenRouterSampling` so the command line and the library
     cannot disagree. Values are tuning knobs that change what a run produces,
     which is why they are arguments rather than environment variables.
     """
@@ -386,15 +429,15 @@ def add_sampling_arguments(parser: Any, *, prefix: str = "inkling") -> Any:
     return parser
 
 
-def sampling_from_args(args: Any, *, prefix: str = "inkling") -> InklingSampling:
-    """Build an :class:`InklingSampling` from parsed argparse arguments."""
+def sampling_from_args(args: Any, *, prefix: str = "openrouter") -> OpenRouterSampling:
+    """Build an :class:`OpenRouterSampling` from parsed argparse arguments."""
 
     def get(name: str) -> Any:
         return getattr(args, f"{prefix}_{name}")
 
     effort = get("reasoning_effort")
     stop = get("stop") or []
-    return InklingSampling(
+    return OpenRouterSampling(
         temperature=get("temperature"),
         top_p=get("top_p"),
         max_tokens=get("max_tokens"),

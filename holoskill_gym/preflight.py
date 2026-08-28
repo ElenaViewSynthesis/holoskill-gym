@@ -58,9 +58,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--env-file", default=".env")
     parser.add_argument(
-        "--inkling",
+        "--openrouter",
         action="store_true",
-        help="Preflight the Inkling optimizer through OpenRouter instead of Holo.",
+        help="Preflight the OpenRouter optimizer instead of Holo.",
     )
     parser.add_argument(
         "--check-only",
@@ -78,16 +78,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Emit the safe check-only manifest as JSON.",
     )
-    from .inkling_backend import add_sampling_arguments
+    from .openrouter_backend import add_sampling_arguments
 
     add_sampling_arguments(parser)
     args = parser.parse_args(argv)
 
     if args.check_only:
         return _runtime_preflight(args)
-    if args.inkling:
+    if args.openrouter:
         load_project_environment(args.env_file)
-        return _inkling_preflight(args)
+        return _openrouter_preflight(args)
 
     # Load .env first so that HOLO_* settings from the file are visible below.
     env_path = load_project_environment(args.env_file)
@@ -212,16 +212,16 @@ def _structured_preflight(*, model: str, timeout: float) -> int:
     return 0
 
 
-def _inkling_preflight(args) -> int:
-    """One structured request to Inkling with the parameters given on the CLI."""
+def _openrouter_preflight(args) -> int:
+    """One structured request to OpenRouter with the parameters given on the CLI."""
 
     from .holo_backend import HoloBackendError
-    from .inkling_backend import InklingBackend, InklingBackendConfig, sampling_from_args
+    from .openrouter_backend import OpenRouterBackend, OpenRouterBackendConfig, sampling_from_args
 
     sampling = sampling_from_args(args)
-    print("OpenRouter Inkling preflight")
+    print("OpenRouter optimizer preflight")
     print(f"  base_url    : {os.environ.get('OPENROUTER_BASE_URL', '(default)')}")
-    print(f"  model       : {os.environ.get('INKLING_MODEL', '(default)')}")
+    print(f"  model       : {os.environ.get('OPENROUTER_MODEL', '(default)')}")
     print("  api_key     : configured (value intentionally not displayed)")
     print(f"  temperature : {sampling.temperature}")
     print(f"  top_p       : {sampling.top_p}")
@@ -231,8 +231,8 @@ def _inkling_preflight(args) -> int:
     print()
 
     try:
-        backend = InklingBackend(
-            InklingBackendConfig.from_env(
+        backend = OpenRouterBackend(
+            OpenRouterBackendConfig.from_env(
                 sampling=sampling,
                 timeout_seconds=args.timeout,
                 max_attempts=1,
@@ -247,7 +247,7 @@ def _inkling_preflight(args) -> int:
     except HoloBackendError as exc:
         details = exc.to_safe_dict()
         print(
-            f"FAIL  inkling preflight: {details['type']} status={details['status_code']}",
+            f"FAIL  openrouter preflight: {details['type']} status={details['status_code']}",
             file=sys.stderr,
         )
         if details["type"] == "model_access_denied":
@@ -275,17 +275,11 @@ def _runtime_preflight(args: argparse.Namespace) -> int:
     if args.condition.endswith("-gated"):
         credential_variables.append("HAI_API_KEY")
 
-    credentials = {
-        variable: credential_status(variable) for variable in credential_variables
-    }
+    credentials = {variable: credential_status(variable) for variable in credential_variables}
     docker = _docker_status()
-    packages = {
-        name: _installed_version(name) for name in ("harbor", "seagym", "skillopt")
-    }
+    packages = {name: _installed_version(name) for name in ("harbor", "seagym", "skillopt")}
     failures = [
-        f"credential:{variable}"
-        for variable, status in credentials.items()
-        if status != "present"
+        f"credential:{variable}" for variable, status in credentials.items() if status != "present"
     ]
     if docker["status"] != "ready":
         failures.append("docker")
