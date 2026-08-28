@@ -1,16 +1,22 @@
 {
   "schema_version": "holoskill-canary-matrix-v1",
   "first_run_n_concurrent": 1,
+  "canary_sequence": ["codex_static_one", "codex_gated"],
   "conditions": [
+    {
+      "id": "codex_static_one",
+      "config": "configs/codex_static_one.json",
+      "kind": "target_only_canary"
+    },
     {
       "id": "codex_gated",
       "config": "configs/codex_gated.json",
-      "kind": "primary"
+      "kind": "first_skillopt_canary"
     },
     {
       "id": "claude_gated",
       "config": "configs/claude_gated.json",
-      "kind": "primary"
+      "kind": "deferred_claude_canary"
     },
     {
       "id": "codex_static",
