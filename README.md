@@ -90,12 +90,12 @@ rollouts map `codex_exec` to Harbor's built-in Codex agent (configured with
 Holo remains the optimizer role; target and optimizer usage are recorded
 separately.
 
-The production condition configs and neutral initial skill are committed under
+The synthetic canary configs and neutral initial skill are committed under
 [`examples/holo_skillopt_matrix/`](examples/holo_skillopt_matrix/README.md).
 They cover gated and static Codex/Claude runs, gate-off, and both transfer
-directions with first-run concurrency fixed at one. Trusted Harbor task packages
-and credentials are explicit external prerequisites and have not been
-simulated or executed here.
+directions with first-run concurrency fixed at one. The checked-in Harbor
+packages are synthetic integration canaries with oracle solutions, not a
+production benchmark. Trusted production repositories remain external.
 
 ## Commands
 
@@ -278,14 +278,17 @@ bash scripts/apply-vendor-patches --check  # report without writing; exits 1 if 
 python -m pytest -q                        # project test suite
 python -m ruff check holoskill_gym tests
 python -m ruff format --check holoskill_gym tests
-python -m holoskill_gym.preflight --optimizer --structured   # needs HAI_API_KEY
+python -m holoskill_gym.preflight --check-only --condition codex-static
+python -m holoskill_gym.preflight --optimizer --structured   # spends HAI_API_KEY
+scripts/scan-artifacts results/ jobs/
 ```
 
-`preflight` is the only command here that spends credentials. It sends one
-structured request to confirm the key, base URL and model resolve.
+`--check-only` never calls a model and reports only credential presence.
+`--optimizer --structured` sends one structured request and spends optimizer
+tokens.
 
 
-The production role split is configured like this (task and split paths
+The production-path canary role split is configured like this (task and split paths
 omitted here):
 
 ```json
@@ -318,7 +321,7 @@ omitted here):
 `holo3-1-35b-a3b` is the only **Holo** model used by this integration, and
 `HoloBackendConfig` rejects other Holo IDs. It is not the only optimizer:
 `optimizer_backend` selects between `holo_openai_compatible` and
-`inkling_openrouter`, which are alternatives filling the same role behind the
+`openrouter`, which are alternatives filling the same role behind the
 `ProposalBackend` protocol. Inkling's parameters and defaults are documented in
 [docs/openrouter-inkling.md](docs/openrouter-inkling.md); it is not reachable
 yet, and fails closed rather than degrading. Holo supports
@@ -437,6 +440,9 @@ agent, and the checkpointed skill enters through Harbor's existing
 `prompt_template_path` hook. Harbor owns checkout, isolation, command
 execution, and ATIF production. Holo optimizer credentials are rejected if a
 configuration attempts to export them into the target-agent environment.
+SkillOpt is required for one gated Codex canary and becomes an optional adapter
+afterward; the rationale and OpenAI Agents SDK follow-up are in
+[the SkillOpt decision](docs/skillopt-decision.md).
 
 ## Computer-use agent models
 

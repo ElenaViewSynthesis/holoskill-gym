@@ -171,7 +171,7 @@ one run, and `optimizer_backend` selects between them:
 | `optimizer_backend` | Model | Pinned by |
 |---|---|---|
 | `holo_openai_compatible` | `holo3-1-35b-a3b` | `HoloBackendConfig` rejects other IDs |
-| `inkling_openrouter` | `INKLING_MODEL`, default `thinkingmachines/inkling-small:free` | `INKLING_*` variables |
+| `openrouter` | `OPENROUTER_MODEL`, default `z-ai/glm-5.2:free`; `thinkingmachines/inkling` also selectable | `OPENROUTER_*` and CLI arguments |
 
 The engine binds to the `ProposalBackend` protocol in `schemas.py`, not to a
 concrete provider, so the two are peers rather than a primary and a special
@@ -186,7 +186,7 @@ integration as a whole.
 
 Inkling is not yet reachable: OpenRouter answers `403 "only available on
 agentic harnesses"` to a direct call for the free Inkling model, so a run
-configured for it fails closed with `InklingAccessError` rather than producing
+configured for it fails closed with `OpenRouterAccessError` rather than producing
 a degraded proposal. See [docs/openrouter-inkling.md](docs/openrouter-inkling.md).
 
 This restriction is scoped to deterministic SkillOpt mutation. `scripts/holo`

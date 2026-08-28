@@ -4,10 +4,10 @@ The control plane is implemented: Holo can produce strict bounded proposals,
 SkillOpt owns the private acceptance gate, SEAGym remains a passive evaluator,
 checkpoint state is hash-verified, and Harbor selects Codex or Claude Code.
 The normalized evidence, strict verifier, fixture repositories, deterministic
-verification smoke, report metrics, experiment configs, and completed-final
-resume/eval lifecycle coverage are now implemented. The next milestone is to
-provision and execute trusted production Harbor tasks, then harden the
-remaining executor and durability edges.
+verification smoke, report metrics, synthetic canary configs, and
+completed-final resume/eval lifecycle coverage are now implemented. The next
+milestone is one Codex static canary and one SkillOpt-gated production-path
+canary. Trusted production tasks remain external.
 
 Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
@@ -121,22 +121,23 @@ features are currently supported and which parity gaps must remain fail-closed.
 - [x] Return valid failed trajectories for agent, timeout, policy, test, and
       benchmark failures. Treat missing or broken infrastructure as an
       infrastructure error, never as an ordinary incorrect solution.
-- [~] Add production Harbor task datasets and configs for Codex gated, Claude
+- [x] Add synthetic Harbor canary tasks and configs for Codex gated, Claude
       Code gated, Codex static control, Claude static control, and the gate-off
-      ablation. Keep first-run concurrency at one.
+      ablation. Keep first-run concurrency at one and do not call this a
+      production benchmark.
 - [x] Ship a neutral production initial skill of roughly 300–700 tokens. Keep
       the tiny deterministic skill as a smoke fixture rather than treating it
       as the production starting point.
 
 ### 4. Make executor configuration strict and effective
 
-- [ ] Define and validate the supported `CliCodeOptRolloutAgent` configuration
+- [x] Define and validate the supported `CliCodeOptRolloutAgent` configuration
       instead of silently ignoring unknown keys. Reject unsupported fields with
       an actionable error.
 - [ ] Map task timeout, verifier timeout, maximum steps, network policy, attempt
       policy, raw-log retention, and executor-specific controls to the actual
       Harbor task, backend, or agent configuration that enforces them.
-- [ ] Pass target reasoning effort explicitly through Harbor agent kwargs for
+- [x] Pass target reasoning effort explicitly through Harbor agent kwargs for
       both Codex and Claude Code and record the applied value in ATIF. Do not
       rely on `OPENAI_REASONING_EFFORT`, which the current Harbor binding does
       not consume automatically.
@@ -144,7 +145,7 @@ features are currently supported and which parity gaps must remain fail-closed.
       with Harbor's sandbox-installed agents. Remove unused variables or add a
       real, tested override path; do not claim they are required when the
       implementation ignores them.
-- [ ] Validate executor/model compatibility and required credentials during
+- [x] Validate executor/model compatibility and required credentials during
       runtime inspection without printing secret values.
 
 ### 5. Correct gate metrics and cost accounting
@@ -177,18 +178,18 @@ features are currently supported and which parity gaps must remain fail-closed.
 
 ### 6. Preserve audit data on failures and harden privacy
 
-- [ ] Refactor proposal execution into staged outcomes so a parsed but
+- [x] Refactor proposal execution into staged outcomes so a parsed but
       semantically invalid proposal still records the structured response,
       response metadata, reflection usage, proposal-call usage, and validation
       diagnostics. Usage incurred before a later optimizer or gate failure must
       also be counted.
-- [ ] Record safe metadata for malformed and truncated responses. Classify
+- [x] Record safe metadata for malformed and truncated responses. Classify
       invalid JSON returned with `finish_reason=length` as truncation and retain
       returned usage when the provider supplies it.
-- [ ] Mark `HoloBackendConfig.api_key` as excluded from dataclass `repr` and add
+- [x] Mark `HoloBackendConfig.api_key` as excluded from dataclass `repr` and add
       regression tests proving configuration objects and exceptions cannot
       expose the key.
-- [ ] Apply secret and absolute-path policy to every model-provided proposal
+- [x] Apply secret and absolute-path policy to every model-provided proposal
       field, including diagnosis, expected effects, risks, rationale, section,
       and edit operands—not only inserted skill text.
 - [ ] Strengthen evidence and log redaction for standalone API-key shapes,
@@ -198,7 +199,7 @@ features are currently supported and which parity gaps must remain fail-closed.
 - [ ] Derive and pass real forbidden benchmark/repository fragments to proposal
       validation so the policy can detect task-specific material beyond task IDs
       and generic secret/path patterns.
-- [ ] Add artifact-level secret scanning tests covering update directories,
+- [~] Add artifact-level secret scanning tests covering update directories,
       SEAGym normalized records, checkpoint metadata, reports, and Harbor
       references.
 
@@ -217,7 +218,7 @@ features are currently supported and which parity gaps must remain fail-closed.
 - [ ] Add schema-level list and string limits for diagnosis, edits, rationale,
       evidence IDs, expected effects, and risks. Continue enforcing final skill
       token/character limits locally.
-- [ ] Make `StateStore.commit()` transactionally recoverable across
+- [x] Make `StateStore.commit()` transactionally recoverable across
       `best_skill.md`, `state.json`, `update_history.jsonl`, and
       `rejected_edits.jsonl`. A crash between writes must be recoverable rather
       than leaving a permanent skill/state hash mismatch.
@@ -227,7 +228,7 @@ features are currently supported and which parity gaps must remain fail-closed.
       dirty-state indicator instead of only hard-coded commit strings. Hash the
       complete task specifications, effective configuration, prompts, initial
       skill, and split manifests needed to reproduce a run.
-- [ ] Commit a root dependency lockfile so the editable submodule pins and all
+- [x] Commit a root dependency lockfile so the editable submodule pins and all
       transitive Python dependencies can be reconstructed deterministically.
 
 ### 8. Add deterministic integration and CI coverage
@@ -260,7 +261,7 @@ features are currently supported and which parity gaps must remain fail-closed.
 - [~] Add report assertions for separate correctness, performance, reliability,
       target cost, optimizer cost, forgetting, and candidate disposition. Also
       assert reports never claim SEAGym accepted or rejected a proposal.
-- [ ] Add CI commands for root pytest, Ruff, deterministic training, checkpoint
+- [x] Add CI commands for root pytest, Ruff, deterministic training, checkpoint
       evaluation, resume, `git diff --check`, and artifact secret scanning.
 
 ### 9. Documentation, production evaluation, and deferred extensions
@@ -339,7 +340,7 @@ credentialed API call has been made.
 
 ### B. Provision and validate the Docker execution provider
 
-- [ ] Install Docker Engine, or enable Docker Desktop's WSL integration for
+- [x] Install Docker Engine, or enable Docker Desktop's WSL integration for
       this distribution. Ensure the user running SEAGym can reach the daemon
       without embedding `sudo` in experiment commands or granting the task
       containers access to the host Docker socket.
@@ -356,7 +357,7 @@ credentialed API call has been made.
       run artifact. Confirm that the image contains only task inputs and does
       not copy `.env`, Git credentials, provider profiles, or host paths into
       the build context.
-- [ ] Run the task's checked-in oracle solution through Harbor and Docker with
+- [x] Run the task's checked-in oracle solution through Harbor and Docker with
       no model credentials:
 
       ```bash
@@ -368,7 +369,7 @@ credentialed API call has been made.
         -y
       ```
 
-- [ ] Repeat the oracle run for every observer and private-gate task. Require a
+- [x] Repeat the oracle run for every observer and private-gate task. Require a
       valid verifier reward, canonical ATIF, collected artifacts, and clean
       container teardown for each package. A build, launch, timeout, collection,
       or verifier infrastructure failure must not be recorded as reward zero.
@@ -376,7 +377,7 @@ credentialed API call has been made.
       verifier timeouts, process-group termination, and separate-verifier mode
       resolve as declared. Inspect `docker ps` after forced timeout tests and
       require that no task or sidecar container remains running.
-- [ ] Add a Docker-capable CI or dedicated runner job for the oracle pass. Keep
+- [x] Add a Docker-capable CI or dedicated runner job for the oracle pass. Keep
       the ordinary unit-test job credential-free and able to run without a
       daemon.
 
@@ -391,14 +392,14 @@ credential was present in a container or artifact.
       `.env`, print its contents, pass keys as command-line arguments, enable
       shell tracing around secret setup, or copy a credential file into a task
       image.
-- [ ] Fix credential loading before the first production run. The current Holo
+- [x] Fix credential loading before the first production run. The current Holo
       baseline resolves its default `.env` relative to the config directory,
       and the static baseline does not load dotenv at all. Add one common,
       tested load step before baseline and rollout-agent construction, or set an
       explicit absolute/portable `env_file` contract that also covers static and
       checkpoint-eval runs. Do not rely on the caller's current directory or an
       already-exported interactive shell.
-- [ ] Validate only the credentials required by the selected condition and
+- [x] Validate only the credentials required by the selected condition and
       fail before Harbor starts if one is absent or still a placeholder:
 
       | Condition | Required secret inputs |
@@ -422,7 +423,7 @@ credential was present in a container or artifact.
       `ANTHROPIC_API_KEY` to Claude Code tasks. The private verifier receives no
       provider credential unless its own declared environment explicitly needs
       one.
-- [ ] Add safe credential-presence diagnostics that print role, source, and
+- [x] Add safe credential-presence diagnostics that print role, source, and
       status (`present`, `missing`, or `placeholder`) but never length, prefix,
       suffix, hash, or value. Add regression tests for exception, dataclass
       `repr`, subprocess environment, logs, ATIF, checkpoints, and reports.
@@ -433,7 +434,7 @@ forwarded, and artifact secret scans remain clean.
 
 ### D. Add automated runtime and provider preflights
 
-- [ ] Extend `holoskill_gym.preflight` with non-spending `--harbor` and
+- [x] Extend `holoskill_gym.preflight` with non-spending `--harbor` and
       `--docker` checks. Add `--target codex` and `--target claude-code` modes
       that validate configuration and credential presence without calling a
       provider; require a separate explicit flag for a billable network canary.
@@ -441,14 +442,14 @@ forwarded, and artifact secret scans remain clean.
       one-request Holo authentication check. Run it only after local Harbor and
       oracle-Docker checks pass; its structured output must contain safe request
       metadata but no key or provider response content.
-- [ ] Add a one-task static canary config per target executor. Run Codex and
+- [~] Add a one-task static canary config per target executor. Run Codex and
       Claude Code independently so authentication, sandbox launch, ATIF
       validation, verifier execution, and target-only cost accounting can be
       diagnosed without involving SkillOpt or Holo.
 - [ ] Mock command discovery, Docker responses, missing-daemon errors, missing
       keys, placeholder keys, provider 401/403, rate limits, and timeouts in
       unit tests. Keep default test and inspection paths network-free.
-- [ ] Make the combined production preflight emit a machine-readable manifest
+- [x] Make the combined production preflight emit a machine-readable manifest
       containing boolean readiness by dependency and safe version/revision
       metadata. It must exit nonzero if any dependency required by the selected
       config is unavailable.
@@ -456,6 +457,69 @@ forwarded, and artifact secret scans remain clean.
 **Preflight exit criterion:** one command can prove configuration, Harbor,
 Docker, task-package, and credential readiness before a paid rollout, while
 network canaries remain explicit and opt-in.
+
+### D1. Run the Docker canary with the oracle agent
+
+The first thing to run, before any credentialed or remote execution. The
+oracle agent applies `solution/solve.sh` instead of calling a model, so this
+costs nothing and needs no provider key. It is the only check that exercises
+the parts never yet executed: `docker build`, the egress sidecar, the verifier
+inside the container, and reward emission.
+
+Until it passes, the five packages are verified as Python and unverified as
+Harbor trials.
+
+```bash
+.venv-linux/bin/harbor run \
+  -p data/holoskill-codeopt-v1/observer/codeopt-train-001 \
+  -e docker \
+  -a oracle \
+  --n-concurrent 1 \
+  -y
+```
+
+- [x] Preconditions. `docker version` answers inside WSL, `/var/run/docker.sock`
+      exists, the user is in the `docker` group, and `harbor --version` reports
+      the pinned 0.15.0 from `.venv-linux`. See
+      [docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md).
+- [x] Run `codeopt-train-001` as above. Expect the egress-control sidecar to
+      build on first use; that is the pause, not a hang.
+- [x] Read `jobs/<timestamp>/<task>__<id>/verifier/reward.json` and assert
+      `infra_valid: 1`, `correctness_pass: 1`, `edit_policy_pass: 1`,
+      `reward: 1`, and `speedup` at roughly the measured figure for this task.
+      A `reward: 0` with `infra_valid: 1` is a real failure; `infra_valid: 0`
+      is an environment problem and must not be scored as one.
+- [x] Repeat for the other four packages, including `codeopt-gate-001` under
+      `private_gate/`. The gate task must pass here or the private gate cannot
+      run at all.
+- [ ] Record the resolved image id and `trial.log` path per task in the run
+      manifest, so a later regression can be compared against a known-good
+      trial.
+- [x] Only after all five pass: swap `-a oracle` for `-a codex -m gpt-5.6-sol`
+      with `OPENAI_API_KEY` exported, still at `--n-concurrent 1`. A task that
+      fails under oracle would fail under a real agent too, and cost money to
+      discover it.
+
+**How to check a package without a full trial.** Three cheaper gates exist and
+should be used in this order, since each catches a different class of problem:
+
+```bash
+# 1. package structure and template drift -- no Docker
+.venv-linux/bin/python -m pytest tests/test_harbor_task_packages.py -q
+
+# 2. the image actually builds -- catches a missing interpreter or tool
+docker build -f data/holoskill-codeopt-v1/observer/codeopt-train-001/environment/Dockerfile \
+  data/holoskill-codeopt-v1/observer/codeopt-train-001/environment
+
+# 3. tests and benchmark inside the built image, without Harbor
+docker run --rm <image-id> sh -c "python -m pytest tests/ -q && python benchmark.py"
+```
+
+Step 1 is what the suite already runs. Step 2 is the check whose absence let a
+Dockerfile that could never build reach a commit. Step 3 proves the workload
+runs in the image rather than only on the host interpreter. A full `harbor run`
+additionally covers the sidecar, the phase network policy, reward file
+placement and artifact collection, which none of the three can reach.
 
 ### D2. Add two Daytona run examples alongside the Docker path
 
@@ -556,6 +620,37 @@ Snapshots found in `ERROR` state are deleted and recreated; an explicitly named
 **Daytona stays out of CI and the deterministic smoke.** It needs credentials
 and spends money, so the credential-free path remains the default; these
 examples are operator-invoked only.
+
+### D3. Inkling optimizer access is blocked upstream, not misconfigured
+
+`thinkingmachines/inkling-small:free` and `thinkingmachines/inkling:free` both
+answer `403 "only available on agentic harnesses"`. Re-checked 2026-08-28 with
+a 360-second client timeout; the refusal returns in 0.0 to 27 seconds, so it is
+a policy decision and not queueing or congestion.
+
+Ruled out, each by measurement rather than inference:
+
+| Hypothesis | Evidence against |
+|---|---|
+| Wrong key type | The backend reads `OPENROUTER_API_KEY` only; asserted by a test that sets `OPENAI_API_KEY` to a different value and checks it is ignored |
+| Invalid or unfunded key | `GET /api/v1/key` returns valid, `is_free_tier: true` |
+| Account cannot complete requests | `liquid/lfm-2.5-2.6b:free` returned 200 on the same key seconds earlier |
+| Model not available to the account | Both Inkling ids appear in `GET /v1/models` for this key |
+| High traffic or a slow queue | A queue yields a timeout, a 429, or a slow 200 — never a 403 in 0.0s while another model succeeds |
+| Missing attribution headers | Retried with `HTTP-Referer` and `X-Title` set; unchanged |
+
+The gate is on the *caller* being a registered app from
+<https://openrouter.ai/apps>, which a plain Python process is not. Waiting
+longer cannot satisfy it.
+
+- [ ] No code change is needed. `OpenRouterBackend` already classifies this as
+      `OpenRouterAccessError` and fails closed rather than degrading.
+- [ ] To actually use Inkling, either run it through a registered harness, or
+      point `OPENROUTER_MODEL` at a non-gated model. The backend and
+      its CLI parameters are provider-agnostic and need no edit for the latter.
+- [ ] Keep `optimizer_backend: "holo_openai_compatible"` as the default until
+      one of those is done. A config selecting `inkling_openrouter` will fail
+      closed at the first proposal.
 
 ### E. Stage the first paid run and then unlock the matrix
 

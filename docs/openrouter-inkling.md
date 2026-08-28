@@ -41,7 +41,7 @@ Configured in `.env`; see `.env.example` for the documented slots.
 ```dotenv
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-INKLING_MODEL=thinkingmachines/inkling-small:free
+OPENROUTER_MODEL=z-ai/glm-5.2:free
 # OPENROUTER_HTTP_REFERER=   # optional, used for OpenRouter's rankings
 # OPENROUTER_X_TITLE=        # optional, used for OpenRouter's rankings
 ```
@@ -51,31 +51,31 @@ Never inline a key in source.
 `.env` carries credentials, endpoint and model identity only. **Sampling and
 reasoning parameters are command-line arguments**, because they change what a
 run produces and therefore belong in that run's recorded configuration rather
-than in ambient process state. A stray `INKLING_TEMPERATURE` in the environment
+than in ambient process state. A stray `OPENROUTER_TEMPERATURE` in the environment
 is ignored, and a test asserts that.
 
 ```bash
-python -m holoskill_gym.preflight --inkling   --inkling-temperature 0.0 --inkling-seed 42 --inkling-reasoning-effort medium
+python -m holoskill_gym.preflight --openrouter --openrouter-temperature 0.0 --openrouter-seed 42 --openrouter-reasoning-effort medium
 ```
 
 `add_sampling_arguments(parser)` registers the whole group on any argparse
 parser, and `sampling_from_args(args)` turns the result into an
-`InklingSampling`. Their defaults are the dataclass defaults, asserted equal by
+`OpenRouterSampling`. Their defaults are the dataclass defaults, asserted equal by
 a test so the two cannot drift.
 
 | Argument | Default | Why this default |
 |---|---|---|
-| `--inkling-temperature` | `0.0` | OpenRouter defaults to `1`; an optimizer driving an accept/reject gate must be reproducible |
-| `--inkling-seed` / `--no-inkling-seed` | `42` | matches the example configs' seed; the negative form sends none |
-| `--inkling-max-tokens` | `4096` | matches Holo's clamp, so the two backends have comparable budgets |
-| `--inkling-top-p` | `1.0` | unchanged from OpenRouter |
-| `--inkling-frequency-penalty` | `0.0` | unchanged |
-| `--inkling-presence-penalty` | `0.0` | unchanged |
-| `--inkling-stop` | none | repeatable |
-| `--inkling-reasoning` / `--no-inkling-reasoning` | enabled | it is a reasoning model |
-| `--inkling-reasoning-effort` | `medium` | matches the `OPENAI_REASONING_EFFORT` convention; `none` unsets it |
-| `--inkling-reasoning-max-tokens` | unset | mutually exclusive with effort; both set fails closed |
-| `--inkling-reasoning-exclude` | off | omit reasoning from the response |
+| `--openrouter-temperature` | `0.0` | OpenRouter defaults to `1`; an optimizer driving an accept/reject gate must be reproducible |
+| `--openrouter-seed` / `--no-openrouter-seed` | `42` | matches the example configs' seed; the negative form sends none |
+| `--openrouter-max-tokens` | `4096` | matches Holo's clamp, so the two backends have comparable budgets |
+| `--openrouter-top-p` | `1.0` | unchanged from OpenRouter |
+| `--openrouter-frequency-penalty` | `0.0` | unchanged |
+| `--openrouter-presence-penalty` | `0.0` | unchanged |
+| `--openrouter-stop` | none | repeatable |
+| `--openrouter-reasoning` / `--no-openrouter-reasoning` | enabled | it is a reasoning model |
+| `--openrouter-reasoning-effort` | `medium` | matches the `OPENAI_REASONING_EFFORT` convention; `none` unsets it |
+| `--openrouter-reasoning-max-tokens` | unset | mutually exclusive with effort; both set fails closed |
+| `--openrouter-reasoning-exclude` | off | omit reasoning from the response |
 
 Tool calling is deliberately not exposed. The mutation call is strict
 `json_schema` plus local semantic validation; tools would be an alternative
@@ -174,6 +174,28 @@ curl -N https://openrouter.ai/api/v1/chat/completions \
 | `seed` | integer | — | Sample deterministically; repeated requests with the same seed and parameters should return the same result. |
 | `tools` | array | — | Tool calling, following OpenAI's tool-calling format. |
 
+## Selecting Inkling
+
+Inkling remains a selectable model for the `openrouter` backend. Which variant
+matters, because the mutation call requires strict `json_schema`:
+
+| Model | Free | `response_format` | Usable as optimizer |
+|---|---|---|---|
+| `thinkingmachines/inkling` | no, $0.95/$4.05 per M | yes | **yes** |
+| `thinkingmachines/inkling:free` | yes | no | no, rejected at config time |
+| `thinkingmachines/inkling-small` | no, $0.45/$1.20 per M | no | no |
+| `thinkingmachines/inkling-small:free` | yes | no | no, rejected at config time |
+
+```bash
+# The paid variant, which supports structured output.
+OPENROUTER_MODEL=thinkingmachines/inkling python -m holoskill_gym.preflight --openrouter
+```
+
+`MODELS_WITHOUT_STRUCTURED_OUTPUT` in `openrouter_backend.py` rejects the
+variants that cannot satisfy the schema, with an actionable error at
+configuration time rather than a malformed-output failure after tokens are
+spent. The free variants additionally answer `403` to any direct call.
+
 ## Relationship to this project
 
 Inkling is an **alternative optimizer**, a peer of Holo rather than an
@@ -182,8 +204,11 @@ extension of it. `optimizer_backend` selects one:
 | `optimizer_backend` | Backend |
 |---|---|
 | `holo_openai_compatible` | `holo3-1-35b-a3b`, pinned by `HoloBackendConfig` |
-| `inkling_openrouter` | `INKLING_MODEL`, parameters from the CLI |
+| `openrouter` | `OPENROUTER_MODEL`, parameters from the CLI |
 | `deterministic_fake` | credential-free, used by the smoke |
+
+`inkling_openrouter` remains accepted as an alias for `openrouter`, so existing
+configs keep working.
 
 The engine binds to the `ProposalBackend` protocol in
 [`schemas.py`](../holoskill_gym/schemas.py), so neither backend is privileged.
@@ -195,5 +220,5 @@ selecting a different optimizer is done with `optimizer_backend`, never by
 pointing `HOLO_OPTIMIZER_MODEL` somewhere else.
 
 Because the model is not reachable yet, a run configured for
-`inkling_openrouter` fails closed with `InklingAccessError` rather than
+`openrouter` fails closed with `OpenRouterAccessError` rather than
 producing a degraded proposal.

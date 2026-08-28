@@ -1,4 +1,4 @@
-# SkillOpt/Holo production guide
+# SkillOpt/Holo canary and production-path guide
 
 ## Architecture and authority
 
@@ -56,6 +56,12 @@ spacing and makes a short 429 burst wait instead of failing in roughly one
 second. The first production configs still use `backend.n_concurrent: 1` so
 task and optimizer failures remain easy to attribute.
 
+Use the non-spending condition preflight first:
+
+```bash
+python -m holoskill_gym.preflight --check-only --condition codex-static --json
+```
+
 ## Task and split contract
 
 Observer tasks live in the SEAGym task index and immutable train/validation/test
@@ -91,7 +97,9 @@ attempts are retained rather than rejected.
 
 Hidden reasoning is never persisted. Prompts and errors are sanitized, action
 summaries are bounded, subprocess stdout/stderr are bounded, and credential
-fields remain redacted. Numeric token telemetry survives redaction.
+fields remain redacted. Numeric token telemetry and safe response metadata
+survive malformed, truncated, and semantically rejected proposals. Run
+`scripts/scan-artifacts` over generated results before publication.
 
 ## Verifier and metrics
 
@@ -125,7 +133,7 @@ Matrix configs disable SEAGym's combined `tokens.overall` output and register
 `role_separated_spend`, which has only `target` and `optimizer` branches. They
 are never summed into a single spend figure.
 
-## Experiment matrix
+## Synthetic canary matrix
 
 The committed matrix is under `examples/holo_skillopt_matrix/`:
 
@@ -134,10 +142,12 @@ The committed matrix is under `examples/holo_skillopt_matrix/`:
 - a Codex gate-off ablation;
 - Codex-to-Claude and Claude-to-Codex frozen checkpoint evaluation configs.
 
-The production Harbor dataset is intentionally not simulated. Provision the
-trusted task packages at the paths documented by the matrix before running it.
-All matrix configs can be inspected without credentials; the gated runs require
-Holo and target credentials plus Harbor/Docker capacity.
+The checked-in Harbor dataset is deliberately synthetic and includes oracle
+solutions. It is suitable for integration canaries only. It must not be
+presented as trusted production data or used for model rankings. Trusted
+production repositories are an external future input. All matrix configs can
+be inspected without credentials; gated runs require Holo and target
+credentials plus Harbor/Docker capacity.
 
 Transfer configs are eval-only. Their metric subtracts the source run's `A_T`
 score from the target-harness checkpoint score for each matching view. The
@@ -158,8 +168,9 @@ Checkpoint evaluation never calls baseline update, SkillOpt reflection, or
 Holo proposal generation. Resuming a completed `final` checkpoint is an
 idempotent no-op before metric/report recomputation: committed update count,
 metric inputs, state, deployed skill, metrics, and summary report remain
-byte-identical. Intermediate-checkpoint recovery is still covered primarily by
-the state-store guard and remains a production follow-up.
+byte-identical. State commits use a replayable write-ahead transaction. Loading
+a checkpoint replays an interrupted skill/history/rejection/state commit
+idempotently before verifying its hash.
 
 ## Artifacts
 
@@ -172,14 +183,18 @@ Important run paths include:
 - `fixture_trials/` or `harbor/jobs/`: local task artifacts and ATIF paths;
 - `metrics.json` and `reports/`: reproducible observer outputs.
 
+## SkillOpt lifetime
+
+SkillOpt remains required for one gated Codex production-path canary, then
+moves behind an optional optimizer protocol. Claude execution is deferred.
+See [the decision record](skillopt-decision.md).
+
 ## Known limitations
 
-- Trusted production Harbor task packages and credentials are external and
-  have not been executed in this repository.
-- Per-executor reasoning-effort and several Harbor policy knobs still need
-  stricter `CliCodeOptRolloutAgent` configuration validation.
+- The checked-in tasks are synthetic canaries; trusted production tasks remain
+  external and have not been executed.
 - Verifiers v1 does not yet cover every Harbor feature, notably multi-step
   tasks and several sidecar/separate-verifier build paths.
-- Intermediate-checkpoint trainer resume and full fake Codex/Claude wrapper
-  coverage remain open even though completed-final resume and the shared
-  subprocess lifecycle are integration-tested.
+- Full trainer-level intermediate-checkpoint and fake Claude wrapper coverage
+  remain open even though state transaction recovery and completed-final resume
+  are tested.
