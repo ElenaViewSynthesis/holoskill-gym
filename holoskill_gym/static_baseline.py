@@ -10,6 +10,7 @@ from typing import Any
 from seagym.baselines import BaselineState, Checkpoint
 from seagym.baselines.static import StaticBaseline
 
+from .configuration import load_project_environment
 from .state import skill_sha256
 
 
@@ -31,6 +32,7 @@ class StaticSkillBaseline(StaticBaseline):
         base_dir: Path | None,
     ) -> StaticSkillBaseline:
         del models, run_dir
+        load_project_environment(config.get("env_file"))
         value = config.get("initial_skill_path")
         if value in (None, ""):
             raise ValueError("StaticSkillBaseline requires initial_skill_path")
