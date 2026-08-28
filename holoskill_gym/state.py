@@ -48,7 +48,7 @@ class SkillOptState(BaseModel):
 
 
 class StateStore:
-    """Persist the deployed skill and metadata, committing metadata last."""
+    """Persist deployed state through a replayable write-ahead transaction."""
 
     def __init__(self, state_dir: Path) -> None:
         self.state_dir = state_dir.resolve()
@@ -56,6 +56,7 @@ class StateStore:
         self.state_path = self.state_dir / "state.json"
         self.rejected_path = self.state_dir / "rejected_edits.jsonl"
         self.history_path = self.state_dir / "update_history.jsonl"
+        self.transaction_path = self.state_dir / "pending_commit.json"
 
     def initialize(self, *, initial_skill: str, metadata: dict[str, Any]) -> SkillOptState:
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,10 @@ class StateStore:
         return state
 
     def load(self) -> SkillOptState:
+        self._recover_pending_commit()
+        return self._load_verified()
+
+    def _load_verified(self) -> SkillOptState:
         try:
             state = SkillOptState.model_validate_json(self.state_path.read_text(encoding="utf-8"))
             skill = self.skill_path.read_text(encoding="utf-8")
@@ -108,7 +113,8 @@ class StateStore:
         if update_index <= current.last_committed_update:
             raise StateIntegrityError(f"update {update_index} was already committed")
 
-        changed = deployed_skill != self.read_skill()
+        current_skill = self.read_skill()
+        changed = deployed_skill != current_skill
         accepted = bool(gate_decision and gate_decision.accepted and changed)
         rejected = bool(gate_decision and not gate_decision.accepted)
         cumulative = _add_usage(prior.cumulative_optimizer_usage, optimizer_usage)
@@ -137,14 +143,27 @@ class StateStore:
             "gate": None if gate_decision is None else gate_decision.model_dump(),
             "optimizer_usage": optimizer_usage.model_dump(),
         }
-        _atomic_write_text(self.skill_path, deployed_skill)
-        _atomic_append_jsonl(self.history_path, history)
+        history_content = _appended_jsonl(self.history_path, history)
+        rejected_content = self.rejected_path.read_text(encoding="utf-8")
         if rejected and proposal_record is not None:
-            _atomic_append_jsonl(
-                self.rejected_path,
-                {"update_index": update_index, "proposal": proposal_record},
+            rejected_content = _appended_jsonl(
+                self.rejected_path, {"update_index": update_index, "proposal": proposal_record}
             )
-        self._write_state(next_state)
+        transaction = {
+            "schema_version": "1",
+            "prior_current_hash": prior.current_hash,
+            "prior_last_committed_update": prior.last_committed_update,
+            "deployed_skill": deployed_skill,
+            "history_content": history_content,
+            "rejected_content": rejected_content,
+            "next_state": next_state.model_dump(mode="json"),
+        }
+        _atomic_write_text(
+            self.transaction_path,
+            json.dumps(transaction, indent=2, sort_keys=True) + "\n",
+        )
+        self._apply_transaction(transaction)
+        _atomic_unlink(self.transaction_path)
         return next_state
 
     def _write_state(self, state: SkillOptState) -> None:
@@ -152,6 +171,44 @@ class StateStore:
             self.state_path,
             json.dumps(state.model_dump(mode="json"), indent=2, sort_keys=True) + "\n",
         )
+
+    def _recover_pending_commit(self) -> None:
+        if not self.transaction_path.exists():
+            return
+        try:
+            transaction = json.loads(self.transaction_path.read_text(encoding="utf-8"))
+            if transaction.get("schema_version") != "1":
+                raise ValueError("unsupported transaction schema")
+            next_state = SkillOptState.model_validate(transaction["next_state"])
+            current_state = SkillOptState.model_validate_json(
+                self.state_path.read_text(encoding="utf-8")
+            )
+            prior_identity = (
+                transaction["prior_current_hash"],
+                int(transaction["prior_last_committed_update"]),
+            )
+            current_identity = (
+                current_state.current_hash,
+                current_state.last_committed_update,
+            )
+            next_identity = (next_state.current_hash, next_state.last_committed_update)
+            if current_identity not in {prior_identity, next_identity}:
+                raise ValueError("state does not match transaction endpoints")
+            if skill_sha256(str(transaction["deployed_skill"])) != next_state.current_hash:
+                raise ValueError("transaction skill hash mismatch")
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            raise StateIntegrityError(
+                f"cannot recover pending state transaction: {type(exc).__name__}"
+            ) from exc
+        self._apply_transaction(transaction)
+        _atomic_unlink(self.transaction_path)
+
+    def _apply_transaction(self, transaction: dict[str, Any]) -> None:
+        next_state = SkillOptState.model_validate(transaction["next_state"])
+        _atomic_write_text(self.skill_path, str(transaction["deployed_skill"]))
+        _atomic_write_text(self.history_path, str(transaction["history_content"]))
+        _atomic_write_text(self.rejected_path, str(transaction["rejected_content"]))
+        self._write_state(next_state)
 
 
 def skill_sha256(skill: str) -> str:
@@ -170,10 +227,10 @@ def _add_usage(left: OptimizerUsage, right: OptimizerUsage) -> OptimizerUsage:
     )
 
 
-def _atomic_append_jsonl(path: Path, record: dict[str, Any]) -> None:
+def _appended_jsonl(path: Path, record: dict[str, Any]) -> str:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     line = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
-    _atomic_write_text(path, existing + line)
+    return existing + line
 
 
 def _atomic_write_text(path: Path, content: str) -> None:
@@ -195,3 +252,13 @@ def _atomic_write_text(path: Path, content: str) -> None:
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
+
+
+def _atomic_unlink(path: Path) -> None:
+    path.unlink()
+    if hasattr(os, "O_DIRECTORY"):
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
