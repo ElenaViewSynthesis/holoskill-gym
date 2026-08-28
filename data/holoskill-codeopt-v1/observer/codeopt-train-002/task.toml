@@ -8,6 +8,7 @@ keywords = ["optimization", "programming", "async-batching"]
 
 [metadata]
 category = "programming"
+benchmark_trust = "synthetic_canary"
 difficulty = "medium"
 difficulty_explanation = "Single hot path; the win is algorithmic, not incidental."
 holoskill_family = "async-batching"
@@ -18,13 +19,17 @@ holoskill_optimization_direction = "maximize"
 [agent]
 timeout_sec = 1200.0
 user = "root"
+network_mode = "allowlist"
+allowed_hosts = ["api.openai.com", "api.anthropic.com"]
 
 [verifier]
 timeout_sec = 600.0
 user = "root"
+network_mode = "no-network"
 
 [environment]
-network_mode = "no-network"
+network_mode = "allowlist"
+allowed_hosts = ["deb.debian.org", "security.debian.org", "registry.npmjs.org", "nodejs.org", "raw.githubusercontent.com", "downloads.claude.ai"]
 build_timeout_sec = 600.0
 os = "linux"
 cpus = 2

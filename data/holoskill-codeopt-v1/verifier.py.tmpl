@@ -18,10 +18,10 @@ REWARD_PATH = LOG_DIR / "reward.json"
 DETAIL_PATH = LOG_DIR / "holoskill_verifier.json"
 PATCH_PATH = LOG_DIR / "changes.patch"
 UNTRACKED_PATH = LOG_DIR / "untracked_manifest.json"
-TASK_ID = "codeopt-train-001"
-MODULE = "src/prefix_cache.py"
-METRIC = "encode_throughput_units"
-DIRECTION = "maximize"
+TASK_ID = "$TASK_ID"
+MODULE = "$MODULE"
+METRIC = "$METRIC"
+DIRECTION = "$DIRECTION"
 PROTECTED = ("tests/", "benchmark.py", "task.toml", ".git/")
 MAX_LOG_CHARS = 256_000
 
