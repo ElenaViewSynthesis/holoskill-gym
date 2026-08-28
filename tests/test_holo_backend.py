@@ -117,6 +117,12 @@ def test_backend_rejects_non_35b_holo_models() -> None:
         config(model="holo3-122b-a10b")
 
 
+def test_config_repr_never_contains_api_key() -> None:
+    secret = "a-secret-that-must-not-appear"
+
+    assert secret not in repr(config(api_key=secret))
+
+
 def test_production_retry_defaults_wait_through_rate_limit_bursts() -> None:
     production = HoloBackendConfig(api_key="not-a-real-secret")
 
@@ -140,7 +146,9 @@ def test_malformed_json_fails_safely() -> None:
         backend.propose(system="system", user="user")
 
     assert exc_info.value.to_safe_dict()["type"] == "malformed_output"
-    assert backend.records == ()
+    assert exc_info.value.call is not None
+    assert exc_info.value.call.usage.total_tokens == 300
+    assert backend.records == (exc_info.value.call,)
 
 
 def test_empty_length_limited_response_is_truncation() -> None:

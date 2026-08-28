@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Fail when generated artifacts contain credential values or secret shapes."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+
+from holoskill_gym.configuration import load_project_environment
+from holoskill_gym.privacy import scan_artifact_tree
+
+SECRET_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "HAI_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("paths", nargs="+", type=Path)
+    parser.add_argument("--env-file", default=".env")
+    args = parser.parse_args(argv)
+    load_project_environment(args.env_file)
+    secrets = [os.environ[name] for name in SECRET_ENV_VARS if os.environ.get(name)]
+    failed = False
+    for root in args.paths:
+        findings = scan_artifact_tree(root, known_secret_values=secrets)
+        for relative in findings:
+            print(f"secret-shaped artifact: {root / relative}")
+            failed = True
+    return int(failed)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

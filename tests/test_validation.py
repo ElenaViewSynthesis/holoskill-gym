@@ -129,6 +129,31 @@ def test_sensitive_or_task_specific_content_is_rejected(new_text: str) -> None:
         )
 
 
+@pytest.mark.parametrize("field", ["diagnosis", "expected_effects", "risks"])
+def test_sensitive_material_is_rejected_in_every_proposal_text_field(field: str) -> None:
+    payload = proposal(edit()).model_dump()
+    payload[field] = ["Read /home/private/benchmark-answer.json."]
+
+    with pytest.raises(ProposalValidationError, match=field):
+        validate_and_apply_proposal(
+            SKILL,
+            SkillUpdateProposal.model_validate(payload),
+            training_evidence_ids={"train-1"},
+        )
+
+
+def test_sensitive_material_is_rejected_in_old_text_and_not_echoed() -> None:
+    secret = "sk-proj-this-is-definitely-secret"
+    with pytest.raises(ProposalValidationError) as exc_info:
+        validate_and_apply_proposal(
+            SKILL,
+            proposal(edit(old_text=secret)),
+            training_evidence_ids={"train-1"},
+        )
+
+    assert secret not in str(exc_info.value)
+
+
 def test_empty_edit_list_is_a_no_op() -> None:
     result = validate_and_apply_proposal(
         SKILL,

@@ -81,17 +81,24 @@ def validate_and_apply_proposal(
             f"{policy.max_edit_operations}"
         )
 
+    errors.extend(
+        _proposal_content_policy_errors(
+            proposal,
+            training_ids | held_out,
+            forbidden_fragments,
+        )
+    )
+
     for index, edit in enumerate(proposal.edits):
         prefix = f"edit[{index}]"
         unknown = sorted(set(edit.evidence_ids) - training_ids)
         if unknown:
-            errors.append(f"{prefix} references evidence outside the training batch: {unknown}")
+            errors.append(
+                f"{prefix} references {len(unknown)} evidence IDs outside the training batch"
+            )
         leaked = sorted(set(edit.evidence_ids) & held_out)
         if leaked:
-            errors.append(f"{prefix} references held-out evidence: {leaked}")
-        errors.extend(
-            _content_policy_errors(edit, prefix, training_ids | held_out, forbidden_fragments)
-        )
+            errors.append(f"{prefix} references {len(leaked)} held-out evidence IDs")
 
     if errors:
         raise ProposalValidationError(errors)
@@ -127,26 +134,37 @@ def validate_and_apply_proposal(
     )
 
 
-def _content_policy_errors(
-    edit: SkillEdit,
-    prefix: str,
+def _proposal_content_policy_errors(
+    proposal: SkillUpdateProposal,
     task_ids: Collection[str],
     forbidden_fragments: Collection[str],
 ) -> list[str]:
     errors: list[str] = []
-    candidate_text = "\n".join(
-        part for part in (edit.section, edit.new_text, edit.rationale) if part is not None
-    )
-    for pattern in (*_SECRET_PATTERNS, *_ABSOLUTE_PATH_PATTERNS):
-        if pattern.search(candidate_text):
-            errors.append(f"{prefix} contains secret-shaped material or an absolute path")
-            break
-    for task_id in sorted(task_ids, key=len, reverse=True):
-        if task_id and edit.new_text and task_id in edit.new_text:
-            errors.append(f"{prefix} injects task identifier {task_id!r} into the skill")
-    for fragment in forbidden_fragments:
-        if fragment and edit.new_text and fragment in edit.new_text:
-            errors.append(f"{prefix} injects forbidden benchmark or repository material")
+    fields: list[tuple[str, str, bool]] = []
+    fields.extend(("diagnosis", value, True) for value in proposal.diagnosis)
+    fields.extend(("expected_effects", value, True) for value in proposal.expected_effects)
+    fields.extend(("risks", value, True) for value in proposal.risks)
+    for index, edit in enumerate(proposal.edits):
+        fields.extend(
+            (f"edit[{index}].{name}", value, name != "evidence_ids")
+            for name, value in (
+                ("section", edit.section),
+                ("old_text", edit.old_text),
+                ("new_text", edit.new_text),
+                ("rationale", edit.rationale),
+                ("evidence_ids", "\n".join(edit.evidence_ids)),
+            )
+            if value is not None
+        )
+    for field_name, text, check_task_ids in fields:
+        if any(pattern.search(text) for pattern in (*_SECRET_PATTERNS, *_ABSOLUTE_PATH_PATTERNS)):
+            errors.append(f"{field_name} contains secret-shaped material or an absolute path")
+            continue
+        if check_task_ids and any(task_id and task_id in text for task_id in task_ids):
+            errors.append(f"{field_name} contains a task identifier")
+            continue
+        if any(fragment and fragment in text for fragment in forbidden_fragments):
+            errors.append(f"{field_name} contains forbidden benchmark or repository material")
     return errors
 
 
@@ -165,7 +183,7 @@ def _apply_edit(skill: str, edit: SkillEdit) -> str:
         raise ProposalValidationError(
             [
                 (
-                    f"requires exactly one exact old_text match in section {edit.section!r}; "
+                    "requires exactly one exact old_text match in its section; "
                     f"found {occurrences}"
                 )
             ]
@@ -182,7 +200,7 @@ def _section_content_bounds(skill: str, requested_section: str) -> tuple[int, in
     matches = [match for match in headings if match.group("title").strip() == requested]
     if len(matches) != 1:
         raise ProposalValidationError(
-            [f"requires exactly one Markdown section named {requested!r}; found {len(matches)}"]
+            [f"requires exactly one matching Markdown section; found {len(matches)}"]
         )
     match = matches[0]
     level = len(match.group("marks"))

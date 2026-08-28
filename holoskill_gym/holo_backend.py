@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import ValidationError
@@ -32,7 +32,7 @@ DEFAULT_MAX_BACKOFF_SECONDS = 30.0
 class HoloBackendConfig:
     """Connection and retry settings for the Holo optimizer role."""
 
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str = DEFAULT_HOLO_BASE_URL
     model: str = DEFAULT_HOLO_MODEL
     max_completion_tokens: int = DEFAULT_PROPOSAL_MAX_TOKENS
@@ -102,12 +102,14 @@ class HoloBackendError(RuntimeError):
         latency_ms: float,
         status_code: int | None = None,
         retryable: bool = False,
+        call: OptimizerCallRecord | None = None,
     ) -> None:
         super().__init__(message)
         self.attempts = attempts
         self.latency_ms = latency_ms
         self.status_code = status_code
         self.retryable = retryable
+        self.call = call
 
     def to_safe_dict(self) -> dict[str, object]:
         return {
@@ -230,12 +232,18 @@ class HoloBackend:
                 raise normalized from exc
 
             latency_ms = (self._clock() - started) * 1_000
-            result = _parse_response(
-                response,
-                model=self.config.model,
-                attempts=attempt,
-                latency_ms=latency_ms,
-            )
+            try:
+                result = _parse_response(
+                    response,
+                    model=self.config.model,
+                    attempts=attempt,
+                    latency_ms=latency_ms,
+                )
+            except HoloBackendError as exc:
+                if exc.call is not None:
+                    with self._records_lock:
+                        self._records.append(exc.call)
+                raise
             with self._records_lock:
                 self._records.append(result.call)
             return result
@@ -282,6 +290,13 @@ def _parse_response(
     attempts: int,
     latency_ms: float,
 ) -> ProposalResponse:
+    call = _call_record(
+        response,
+        model=model,
+        attempts=attempts,
+        latency_ms=latency_ms,
+        finish_reason=None,
+    )
     try:
         choice = response.choices[0]
         message = choice.message
@@ -290,9 +305,17 @@ def _parse_response(
             "Holo returned a response without a completion choice",
             attempts=attempts,
             latency_ms=latency_ms,
+            call=call,
         ) from exc
 
     finish_reason = getattr(choice, "finish_reason", None)
+    call = _call_record(
+        response,
+        model=model,
+        attempts=attempts,
+        latency_ms=latency_ms,
+        finish_reason=finish_reason,
+    )
     content = getattr(message, "content", None)
     if not isinstance(content, str) or not content.strip():
         error_class = (
@@ -302,6 +325,7 @@ def _parse_response(
             "Holo returned no structured proposal content",
             attempts=attempts,
             latency_ms=latency_ms,
+            call=call,
         )
 
     try:
@@ -312,19 +336,29 @@ def _parse_response(
             "Holo returned content that does not satisfy SkillUpdateProposal",
             attempts=attempts,
             latency_ms=latency_ms,
+            call=call,
         ) from exc
 
-    usage = _extract_usage(getattr(response, "usage", None))
-    call = OptimizerCallRecord(
+    return ProposalResponse(proposal=proposal, call=call)
+
+
+def _call_record(
+    response: Any,
+    *,
+    model: str,
+    attempts: int,
+    latency_ms: float,
+    finish_reason: Any,
+) -> OptimizerCallRecord:
+    return OptimizerCallRecord(
         provider="hcompany",
         model=str(getattr(response, "model", None) or model),
         latency_ms=latency_ms,
         attempts=attempts,
         response_id=_optional_string(getattr(response, "id", None)),
         finish_reason=_optional_string(finish_reason),
-        usage=usage,
+        usage=_extract_usage(getattr(response, "usage", None)),
     )
-    return ProposalResponse(proposal=proposal, call=call)
 
 
 def _extract_usage(usage: Any) -> OptimizerUsage:
