@@ -175,6 +175,7 @@ class NormalizationContext:
     parent_skill_sha256: str | None = None
     repository_commit: str | None = None
     split: str | None = None
+    executor_controls: Mapping[str, Any] | None = None
 
     @classmethod
     def from_metadata(
@@ -184,6 +185,7 @@ class NormalizationContext:
         batch_metadata: Mapping[str, Any] | None = None,
         executor: str | None = None,
         model: str | None = None,
+        executor_controls: Mapping[str, Any] | None = None,
     ) -> NormalizationContext:
         metadata = metadata or {}
         batch_metadata = batch_metadata or {}
@@ -207,6 +209,7 @@ class NormalizationContext:
             parent_skill_sha256=_optional_string(method_state.get("parent_hash")),
             repository_commit=_optional_string(batch_metadata.get("repository_commit")),
             split=_optional_string(batch_metadata.get("split")),
+            executor_controls=executor_controls,
         )
 
 
@@ -315,6 +318,8 @@ def normalize_trajectory_record(
         "source_fields": source_fields,
         "omitted_source_fields": omitted_source_fields,
     }
+    if context.executor_controls:
+        project_extra["executor_controls"] = dict(context.executor_controls)
     if verifier_payload is not None:
         project_extra["verifier_result"] = verifier_payload
     if prompt_omitted_chars:

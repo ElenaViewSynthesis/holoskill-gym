@@ -76,6 +76,71 @@ def test_unknown_executor_fails_closed(tmp_path) -> None:
         )
 
 
+def test_unknown_config_and_agent_kwargs_fail_closed(tmp_path) -> None:
+    with pytest.raises(ValueError, match="rollout config keys"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "reasoning_efort": "high"},
+            models={},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+    with pytest.raises(ValueError, match="Harbor agent kwargs"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "kwargs": {"max_turns": 3}},
+            models={},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+
+
+def test_executor_model_and_credential_are_validated(tmp_path, monkeypatch) -> None:
+    missing_env = tmp_path / "missing.env"
+    monkeypatch.delenv("CODEOPT_TEST_KEY", raising=False)
+    with pytest.raises(ValueError, match="missing codex_exec target credential"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "env_file": str(missing_env)},
+            models={
+                "rollout_model": {
+                    "model": "gpt-test",
+                    "api_key_env": "CODEOPT_TEST_KEY",
+                }
+            },
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+    with pytest.raises(ValueError, match="incompatible with Codex"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "env_file": str(missing_env)},
+            models={"rollout_model": {"model": "anthropic/claude-sonnet"}},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+
+
+def test_reasoning_controls_are_mapped_and_recorded(tmp_path) -> None:
+    agent = CliCodeOptRolloutAgent.from_config(
+        name="codeopt",
+        config={
+            "executor": "codex_exec",
+            "reasoning_effort": "medium",
+            "reasoning_summary": "concise",
+        },
+        models={"rollout_model": {"model": "gpt-test"}},
+        run_dir=tmp_path,
+        base_dir=tmp_path,
+    )
+
+    assert agent.agent_kwargs == {
+        "reasoning_effort": "medium",
+        "reasoning_summary": "concise",
+    }
+    assert agent.initialize(tmp_path).metadata["executor_controls"] == agent.agent_kwargs
+
+
 def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_path) -> None:
     class FakeEnvironment:
         def run_tasks(self, tasks, *, view_name, mode, agent_id):
@@ -95,7 +160,7 @@ def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_p
 
     agent = CliCodeOptRolloutAgent.from_config(
         name="codeopt",
-        config={"executor": "codex_exec"},
+        config={"executor": "codex_exec", "reasoning_effort": "medium"},
         models={"rollout_model": {"model": "gpt-test"}},
         run_dir=tmp_path,
         base_dir=tmp_path,
@@ -127,5 +192,8 @@ def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_p
     assert evidence["attempt_id"] == "attempt-1"
     assert evidence["executor"] == "codex_exec"
     assert evidence["model"] == "gpt-test"
+    assert evidence["extra"]["holoskill_gym"]["executor_controls"] == {
+        "reasoning_effort": "medium"
+    }
     reported = result.to_task_results()[0]
     assert reported.refs["extra"]["holoskill_gym"]["normalized_evidence"] == evidence
