@@ -106,9 +106,7 @@ def test_hash_mismatch_and_duplicate_commit_fail_closed(tmp_path) -> None:
         )
 
 
-def test_interrupted_commit_is_replayed_without_duplicate_history(
-    tmp_path, monkeypatch
-) -> None:
+def test_interrupted_commit_is_replayed_without_duplicate_history(tmp_path, monkeypatch) -> None:
     store = StateStore(tmp_path)
     prior = store.initialize(initial_skill="initial\n", metadata=metadata())
     real_write = state_module._atomic_write_text

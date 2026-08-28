@@ -90,9 +90,7 @@ class CliCodeOptRolloutAgent(HarborRolloutAgent):
             raise TypeError("rollout_agent.config.kwargs must be an object")
         unsupported_kwargs = sorted(set(raw_kwargs) - _EXECUTOR_CONTROL_KEYS[executor])
         if unsupported_kwargs:
-            raise ValueError(
-                f"unsupported {executor} Harbor agent kwargs: {unsupported_kwargs}"
-            )
+            raise ValueError(f"unsupported {executor} Harbor agent kwargs: {unsupported_kwargs}")
         executor_controls = dict(raw_kwargs)
         for key in _EXECUTOR_CONTROL_KEYS[executor]:
             if key in config:

@@ -192,8 +192,6 @@ def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_p
     assert evidence["attempt_id"] == "attempt-1"
     assert evidence["executor"] == "codex_exec"
     assert evidence["model"] == "gpt-test"
-    assert evidence["extra"]["holoskill_gym"]["executor_controls"] == {
-        "reasoning_effort": "medium"
-    }
+    assert evidence["extra"]["holoskill_gym"]["executor_controls"] == {"reasoning_effort": "medium"}
     reported = result.to_task_results()[0]
     assert reported.refs["extra"]["holoskill_gym"]["normalized_evidence"] == evidence

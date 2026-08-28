@@ -181,12 +181,7 @@ def _apply_edit(skill: str, edit: SkillEdit) -> str:
     occurrences = section_text.count(old_text)
     if occurrences != 1:
         raise ProposalValidationError(
-            [
-                (
-                    "requires exactly one exact old_text match in its section; "
-                    f"found {occurrences}"
-                )
-            ]
+            [(f"requires exactly one exact old_text match in its section; found {occurrences}")]
         )
     relative_index = section_text.index(old_text)
     absolute_index = start + relative_index
