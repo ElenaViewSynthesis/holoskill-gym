@@ -1,0 +1,48 @@
+diff --git a/src/harbor/agents/installed/codex.py b/src/harbor/agents/installed/codex.py
+--- a/src/harbor/agents/installed/codex.py
++++ b/src/harbor/agents/installed/codex.py
+@@ -498,8 +498,11 @@ class Codex(BaseInstalledAgent):
+ 
+         try:
+             import litellm
+-        except ImportError:
+-            self.logger.debug("litellm not available; leaving codex cost_usd as None")
++        except Exception as exc:
++            self.logger.debug(
++                "litellm pricing unavailable (%s); leaving codex cost_usd as None",
++                type(exc).__name__,
++            )
+             return None
+ 
+         pricing: dict[str, Any] | None = None
+diff --git a/tests/unit/agents/installed/test_codex_trajectory.py b/tests/unit/agents/installed/test_codex_trajectory.py
+--- a/tests/unit/agents/installed/test_codex_trajectory.py
++++ b/tests/unit/agents/installed/test_codex_trajectory.py
+@@ -1,10 +1,26 @@
+ """Unit tests for Codex ATIF trajectory conversion."""
+ 
++import builtins
+ import json
+ 
+ from harbor.agents.installed.codex import Codex
+ 
+ 
+ class TestCodexTrajectoryConversion:
++    def test_optional_pricing_failure_does_not_discard_token_metrics(
++        self, temp_dir, monkeypatch
++    ):
++        agent = Codex(logs_dir=temp_dir, model_name="openai/o3")
++        original_import = builtins.__import__
++
++        def fail_litellm(name, *args, **kwargs):
++            if name == "litellm":
++                raise FileNotFoundError("simulated unavailable working directory")
++            return original_import(name, *args, **kwargs)
++
++        monkeypatch.setattr(builtins, "__import__", fail_litellm)
++
++        assert agent._compute_cost_from_pricing(100, 20, 10) is None
++
+     def test_tool_call_without_message_does_not_fabricate_assistant_text(
+         self, temp_dir
+     ):
