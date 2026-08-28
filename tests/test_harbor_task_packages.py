@@ -21,7 +21,9 @@ def test_all_canary_images_install_git_before_initializing_repository() -> None:
 def test_all_canary_tasks_use_phase_specific_network_policy() -> None:
     for task_toml in TASKS:
         config = tomllib.loads(task_toml.read_text(encoding="utf-8"))
+        assert config["metadata"]["benchmark_trust"] == "synthetic_canary"
         assert config["environment"]["network_mode"] == "allowlist"
+        assert "github.com" in config["environment"]["allowed_hosts"]
         assert "registry.npmjs.org" in config["environment"]["allowed_hosts"]
         assert config["agent"]["network_mode"] == "allowlist"
         assert "api.openai.com" in config["agent"]["allowed_hosts"]

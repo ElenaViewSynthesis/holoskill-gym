@@ -29,7 +29,7 @@ network_mode = "no-network"
 
 [environment]
 network_mode = "allowlist"
-allowed_hosts = ["deb.debian.org", "security.debian.org", "registry.npmjs.org", "nodejs.org", "raw.githubusercontent.com", "downloads.claude.ai"]
+allowed_hosts = ["deb.debian.org", "security.debian.org", "registry.npmjs.org", "nodejs.org", "github.com", "raw.githubusercontent.com", "downloads.claude.ai"]
 build_timeout_sec = 600.0
 os = "linux"
 cpus = 2
