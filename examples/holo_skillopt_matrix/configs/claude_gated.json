@@ -1,9 +1,9 @@
 {
   "experiment_id": "holoskill_claude_gated",
-  "description": "Primary SkillOpt/Holo condition with Harbor Claude Code rollouts.",
+  "description": "Deferred SkillOpt/Holo canary with synthetic Harbor Claude Code tasks.",
   "seed": 42,
   "task_dataset": {"path": "../tasks/task_index.json", "version": "holoskill-codeopt-v1"},
-  "split_manifest": {"path": "../splits/split.json", "split_id": "holoskill_codeopt_production_v1"},
+  "split_manifest": {"path": "../splits/split.json", "split_id": "holoskill_codeopt_canary_v1"},
   "schedule": {"train_size": 2, "val_size": 1, "test_size": 1, "batch_size": 1, "num_epochs": 1, "num_updates_per_batch": 1},
   "dataloader": {"shuffle_train": false, "drop_last": false},
   "backend": {"name": "harbor", "env": "docker", "n_concurrent": 1, "agent_override_timeout_sec": 1200, "verifier_override_timeout_sec": 600},
@@ -28,7 +28,7 @@
   "rollout_agent": {
     "name": "claude-codeopt",
     "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
-    "config": {"executor": "claude_code_exec", "model_ref": "rollout_model", "n_attempts": 1, "attempt_modes": ["train"]},
+    "config": {"executor": "claude_code_exec", "model_ref": "rollout_model", "reasoning_effort": "medium", "n_attempts": 1, "attempt_modes": ["train"]},
     "models": {
       "rollout_model": {
         "model": "anthropic/claude-sonnet-5",

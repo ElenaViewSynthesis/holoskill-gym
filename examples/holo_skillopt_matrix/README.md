@@ -1,16 +1,21 @@
-# Production experiment matrix
+# Synthetic canary matrix
 
-These configs define the gated Codex and Claude Code conditions, both frozen
-static controls, the Codex gate-off ablation, and the two frozen-skill
-cross-harness transfer directions. Every Harbor backend keeps
-`n_concurrent: 1` for the first production run.
+These configs define the gated Codex and Claude Code conditions, frozen static
+controls, the Codex gate-off ablation, and two frozen-skill cross-harness
+transfer directions. Every Harbor backend keeps `n_concurrent: 1` for the
+first production-path canary.
 
-The configs intentionally do not fabricate benchmark packages. Before running
-them, provision the trusted Harbor dataset at
-`data/holoskill-codeopt-v1/{observer,private_gate}` with task directories whose
-names match `tasks/task_index.json` and `tasks/skillopt_gate.json`. Runtime
-inspection should report those missing paths until that external prerequisite
-is present.
+The checked-in Harbor packages under `data/holoskill-codeopt-v1/` are small,
+synthetic, single-module tasks with included oracle solutions. They validate
+Docker, executor, verifier, network-policy, checkpoint, and gate integration;
+they are not a production benchmark and must not support production-quality or
+model-ranking claims. Trusted production repositories remain external.
+
+The immediate sequence is one Codex static canary followed by exactly one
+Codex SkillOpt-gated canary. Claude credentials and Claude runs are deferred.
+After that first gated canary, SkillOpt becomes an optional optimizer adapter,
+not a required part of the execution path. See
+[`docs/skillopt-decision.md`](../../docs/skillopt-decision.md).
 
 Run gated/static experiments with `seagym train`. Transfer configs are
 read-only and must be invoked with `seagym eval --checkpoint` using the final

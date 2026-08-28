@@ -1,5 +1,5 @@
 {
-  "schema_version": "holoskill-experiment-matrix-v1",
+  "schema_version": "holoskill-canary-matrix-v1",
   "first_run_n_concurrent": 1,
   "conditions": [
     {

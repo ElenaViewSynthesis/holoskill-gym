@@ -1,5 +1,5 @@
 {
-  "split_id": "holoskill_codeopt_production_v1",
+  "split_id": "holoskill_codeopt_canary_v1",
   "split_version": "v1",
   "seed": 42,
   "splits": {
