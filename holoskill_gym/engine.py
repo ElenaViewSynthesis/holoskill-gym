@@ -21,7 +21,12 @@ from .trajectory import (
     normalize_trajectory_records,
     render_structured_evidence_json,
 )
-from .validation import AppliedProposal, ProposalPolicy, validate_and_apply_proposal
+from .validation import (
+    AppliedProposal,
+    ProposalPolicy,
+    ProposalValidationError,
+    validate_and_apply_proposal,
+)
 
 ReflectionFunction = Callable[..., tuple[str, dict[str, int]]]
 GateMetric = Literal["hard", "soft", "mixed", "correctness_gated_performance"]
@@ -90,6 +95,21 @@ class SkillOptReflectionError(RuntimeError):
     """Raised when SkillOpt's free-form reflection stage fails."""
 
 
+class EngineProposalValidationError(ProposalValidationError):
+    """Semantic rejection that retains only in-memory accounting context."""
+
+    def __init__(
+        self,
+        error: ProposalValidationError,
+        *,
+        response: ProposalResponse,
+        reflection: ReflectionRecord,
+    ) -> None:
+        super().__init__(error.errors)
+        self.response = response
+        self.reflection = reflection
+
+
 class SkillOptHoloEngine:
     """Keep unstable SkillOpt internals behind one small integration surface."""
 
@@ -121,24 +141,34 @@ class SkillOptHoloEngine:
         evidence = normalize_training_evidence(training_trajectories)
         evidence_ids = [item["evidence_id"] for item in evidence]
         reflection = self.reflect(current_skill=current_skill, training_evidence=evidence)
-        response = self.backend.propose(
-            system=self.proposal_system_prompt(),
-            user=_proposal_user_prompt(
-                current_skill=current_skill,
-                reflection=reflection.summary,
-                evidence=evidence,
-                rejected_edit_buffer=rejected_edit_buffer,
-                evidence_budget=self._evidence_budget(),
-            ),
-        )
-        applied = validate_and_apply_proposal(
-            current_skill,
-            response.proposal,
-            training_evidence_ids=evidence_ids,
-            held_out_ids=held_out_ids,
-            forbidden_fragments=forbidden_fragments,
-            policy=self.proposal_policy,
-        )
+        try:
+            response = self.backend.propose(
+                system=self.proposal_system_prompt(),
+                user=_proposal_user_prompt(
+                    current_skill=current_skill,
+                    reflection=reflection.summary,
+                    evidence=evidence,
+                    rejected_edit_buffer=rejected_edit_buffer,
+                    evidence_budget=self._evidence_budget(),
+                ),
+            )
+        except Exception as exc:
+            if hasattr(exc, "call"):
+                exc.reflection = reflection
+            raise
+        try:
+            applied = validate_and_apply_proposal(
+                current_skill,
+                response.proposal,
+                training_evidence_ids=evidence_ids,
+                held_out_ids=held_out_ids,
+                forbidden_fragments=forbidden_fragments,
+                policy=self.proposal_policy,
+            )
+        except ProposalValidationError as exc:
+            raise EngineProposalValidationError(
+                exc, response=response, reflection=reflection
+            ) from exc
         return EngineProposal(response=response, reflection=reflection, applied=applied)
 
     def proposal_system_prompt(self) -> str:

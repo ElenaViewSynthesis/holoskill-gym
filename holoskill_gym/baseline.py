@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
-from dotenv import load_dotenv
 from seagym.baselines import (
     BaseBaseline,
     BaselineState,
@@ -22,7 +21,9 @@ from seagym.baselines import (
 )
 from seagym.data.types import TaskIndex
 
+from .configuration import load_project_environment
 from .engine import (
+    EngineProposalValidationError,
     GateExecutionError,
     SkillOptEngineConfig,
     SkillOptHoloEngine,
@@ -31,7 +32,7 @@ from .engine import (
 )
 from .holo_backend import HoloBackend, HoloBackendError
 from .leakage import LeakageGuard
-from .schemas import GateDecision, GateTaskScore, OptimizerUsage
+from .schemas import GateDecision, GateTaskScore, OptimizerUsage, SkillUpdateProposal
 from .state import StateIntegrityError, StateStore, prompt_sha256, skill_sha256
 from .validation import ProposalPolicy, ProposalValidationError
 from .verifier import verifier_result_from_trajectory
@@ -74,7 +75,7 @@ class SkillOptHoloBaseline(BaseBaseline):
         base_dir: Path | None,
     ) -> SkillOptHoloBaseline:
         del models, run_dir
-        load_dotenv(_resolve_path(config.get("env_file", ".env"), base_dir), override=False)
+        load_project_environment(config.get("env_file"))
         initial_skill_path = _resolve_path(_required(config, "initial_skill_path"), base_dir)
         gate_path = _resolve_path(_required(config, "skillopt_gate_path"), base_dir)
         split_path = _resolve_path(_required(config, "split_manifest_path"), base_dir)
@@ -290,6 +291,15 @@ class SkillOptHoloBaseline(BaseBaseline):
                 )
                 deployed_skill = gate_decision.deployed_skill
                 _write_json(update_dir / "gate_decision.json", gate_decision.model_dump())
+        except EngineProposalValidationError as exc:
+            status = "invalid_proposal"
+            deployed_skill = current_skill
+            usage = _add_usage(exc.reflection.usage, exc.response.call.usage)
+            proposal_record = _safe_proposal_metadata(exc.response.proposal)
+            _write_json(update_dir / "optimizer_call.json", exc.response.call.model_dump())
+            _write_json(update_dir / "proposal.json", proposal_record)
+            _write_json(update_dir / "usage.json", usage.model_dump())
+            _write_json(update_dir / "diagnostics.json", _safe_error(exc))
         except ProposalValidationError as exc:
             status = "invalid_proposal"
             deployed_skill = current_skill
@@ -297,6 +307,14 @@ class SkillOptHoloBaseline(BaseBaseline):
         except (HoloBackendError, SkillOptReflectionError) as exc:
             status = "optimizer_error"
             deployed_skill = current_skill
+            if isinstance(exc, HoloBackendError):
+                reflection = getattr(exc, "reflection", None)
+                if reflection is not None:
+                    usage = _add_usage(usage, reflection.usage)
+                if exc.call is not None:
+                    usage = _add_usage(usage, exc.call.usage)
+                    _write_json(update_dir / "optimizer_call.json", exc.call.model_dump())
+                _write_json(update_dir / "usage.json", usage.model_dump())
             details = exc.to_safe_dict() if isinstance(exc, HoloBackendError) else _safe_error(exc)
             _write_json(update_dir / "diagnostics.json", details)
         except GateExecutionError as exc:
@@ -540,6 +558,26 @@ def _add_usage(left: OptimizerUsage, right: OptimizerUsage) -> OptimizerUsage:
 
 def _safe_error(error: Exception) -> dict[str, str]:
     return {"type": type(error).__name__, "message": str(error)[:1_000]}
+
+
+def _safe_proposal_metadata(proposal: SkillUpdateProposal) -> dict[str, Any]:
+    """Retain proposal structure without persisting arbitrary model text."""
+
+    return {
+        "diagnosis_count": len(proposal.diagnosis),
+        "edit_count": len(proposal.edits),
+        "expected_effect_count": len(proposal.expected_effects),
+        "risk_count": len(proposal.risks),
+        "edits": [
+            {
+                "operation": edit.operation,
+                "evidence_id_count": len(edit.evidence_ids),
+                "has_old_text": edit.old_text is not None,
+                "has_new_text": edit.new_text is not None,
+            }
+            for edit in proposal.edits
+        ],
+    }
 
 
 def _write_json(path: Path, value: Any) -> None:
