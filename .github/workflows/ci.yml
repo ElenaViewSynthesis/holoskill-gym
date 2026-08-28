@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize required vendored dependencies
+        run: |
+          git submodule update --init reference/seagym reference/skillopt
+          git -C reference/seagym submodule update --init reference/harbor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Apply and verify vendor patches
+        run: |
+          bash scripts/apply-vendor-patches
+          bash scripts/apply-vendor-patches --check
+      - name: Verify generated files and lock
+        run: |
+          uv lock --check
+          scripts/render-harbor-task-verifiers --check
+      - name: Lint and test
+        run: |
+          uv run ruff check holoskill_gym tests scripts/render-harbor-task-verifiers scripts/scan-artifacts
+          uv run pytest -q
+
+  harbor-oracle:
+    needs: unit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        task:
+          - data/holoskill-codeopt-v1/observer/codeopt-train-001
+          - data/holoskill-codeopt-v1/observer/codeopt-train-002
+          - data/holoskill-codeopt-v1/observer/codeopt-val-001
+          - data/holoskill-codeopt-v1/observer/codeopt-test-001
+          - data/holoskill-codeopt-v1/private_gate/codeopt-gate-001
+    steps:
+      - uses: actions/checkout@v4
+      - name: Initialize required vendored dependencies
+        run: |
+          git submodule update --init reference/seagym reference/skillopt
+          git -C reference/seagym submodule update --init reference/harbor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Prepare patched Harbor
+        run: bash scripts/apply-vendor-patches
+      - name: Run credential-free oracle
+        run: uv run harbor run -p "${{ matrix.task }}" -a oracle -y
+      - name: Scan generated artifacts
+        run: scripts/scan-artifacts jobs/
