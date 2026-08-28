@@ -457,6 +457,106 @@ forwarded, and artifact secret scans remain clean.
 Docker, task-package, and credential readiness before a paid rollout, while
 network canaries remain explicit and opt-in.
 
+### D2. Add two Daytona run examples alongside the Docker path
+
+Daytona is the cloud execution provider Harbor supports for running many
+environments in parallel. It is the alternative to local Docker, not a
+replacement for it: validate a task under `-e docker` with `-a oracle` first,
+because a task that fails locally will fail remotely too, only slower and at
+cost.
+
+**Credentials.** Harbor accepts either form
+(`environments/daytona/environment.py:118-127`):
+
+| Variable | Required |
+|---|---|
+| `DAYTONA_API_KEY` | yes, *or* both of the two below |
+| `DAYTONA_JWT_TOKEN` + `DAYTONA_ORGANIZATION_ID` | alternative to the API key |
+| `DAYTONA_TARGET` | optional; selects the region/target |
+| `DAYTONA_GPU_TYPE_MAP` | optional; only for GPU tasks, which none of ours are |
+
+An API key alone is enough. The slot is in `.env.example` with no value; keep
+the value in `.env` and export it for the run, the same handling as
+`HAI_API_KEY`.
+
+The Daytona SDK is installed and pinned. Harbor raises
+`MissingExtraError(package="daytona", extra="daytona")` without it, and the
+editable source pin in `[tool.uv.sources]` cannot carry an extra, so `daytona`
+is a direct dependency in `pyproject.toml`. Installed version 0.207.0;
+`harbor.environments.daytona.environment.DaytonaEnvironment` imports cleanly.
+
+- [ ] **Example 1 — single-task parity check.** Same task and agent as the
+      Docker canary, so the only variable is the provider. A divergence here is
+      a provider problem, not a task problem.
+
+      ```bash
+      export DAYTONA_API_KEY=...
+      .venv-linux/bin/harbor run         -p data/holoskill-codeopt-v1/observer/codeopt-train-001         -e daytona         -a oracle         --n-concurrent 1         -y
+      ```
+
+      Assert the same reward, `correctness_pass`, `edit_policy_pass` and a
+      comparable speedup as the local run. Record both `jobs/` paths in the run
+      manifest so the comparison is reproducible.
+
+- [ ] **Example 2 — parallel observer sweep.** What Daytona is actually for:
+      the whole observer split at once, which local Docker cannot do at
+      sensible speed.
+
+      ```bash
+      export DAYTONA_API_KEY=...
+      export OPENAI_API_KEY=...
+      .venv-linux/bin/harbor run         -d holoskill-codeopt-v1         -e daytona         -a codex         -m gpt-5.6-sol         --n-concurrent 4         -y
+      ```
+
+      Raise `--n-concurrent` only after example 1 passes. Note the ceiling is
+      the *provider* quota and the model provider's rate limit, not
+      `backend.n_concurrent`, which governs SEAGym runs rather than direct
+      `harbor run` invocations.
+
+**Harbor's Daytona adapter drops `allowed_hosts`. Decide the policy before
+the first Daytona run.**
+
+Daytona is a fully supported Harbor environment. The gap is in the adapter, not
+the platform: Daytona's SDK exposes
+`CreateSandboxFromImageParams(network_block_all, network_allow_list)`, but
+Harbor only ever passes `network_block_all`. `grep -rn "network_allow_list"
+src/harbor/` returns nothing, and nothing under `environments/daytona/` or the
+shared `dind_compose.py` references egress or `allowed_hosts`. The egress
+sidecar is wired only at `environments/docker/docker.py:359`.
+
+| `network_mode` | `-e docker` | `-e daytona` |
+|---|---|---|
+| `no-network` | blocked | blocked |
+| `allowlist` | enforced by the sidecar | **degrades to public network** |
+
+Our tasks use `allowlist` for `[environment]` and `[agent]`, so a Daytona run
+has unrestricted egress with no warning. Treat Daytona results as obtained
+under a weaker network policy than the local run.
+
+- [ ] Choose one before the first Daytona run: accept public egress and record
+      it in the run manifest, or set those phases to `no-network` for Daytona
+      conditions and pre-bake dependencies into the snapshot.
+- [ ] Consider an upstream fix mapping `allowed_hosts` onto
+      `network_allow_list` in the Daytona adapter. It is a small, well-defined
+      change of the same shape as SEAGym#2, and it would make the two providers
+      behave alike rather than requiring per-provider task variants.
+
+**Snapshot invalidation is content-addressed, so a rebuilt image cannot go
+stale.** `snapshots.py:86-94` names auto snapshots
+`harbor__{env_hash}__snapshot`, where `env_hash` is
+`environment_dir_hash_truncated(environment_dir)`. Editing a task's
+`environment/` changes the hash, which changes the snapshot name, so a modified
+task resolves to a different snapshot rather than reusing the old one.
+Snapshots found in `ERROR` state are deleted and recreated; an explicitly named
+`snapshot_template_name` fails fast instead.
+
+- [ ] Note in the run manifest which snapshot name each Daytona condition
+      resolved to, so a result can be traced back to the exact image content.
+
+**Daytona stays out of CI and the deterministic smoke.** It needs credentials
+and spends money, so the credential-free path remains the default; these
+examples are operator-invoked only.
+
 ### E. Stage the first paid run and then unlock the matrix
 
 - [ ] Run one target-only static canary for Codex, then one for Claude Code.

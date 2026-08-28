@@ -17,6 +17,7 @@ update.
 | [agents.md](agents.md) | Executor bindings: how SEAGym drives an agent it does not own, and how `HarborRolloutAgent` is subclassed |
 | [todo.md](todo.md) | Implementation roadmap for the production data plane, plus the deferred executor backlog |
 | [docs/skillopt_holo.md](docs/skillopt_holo.md) | Production architecture, evidence, verifier, metrics, experiment matrix, eval/resume, privacy, and limitations |
+| [docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md) | Docker socket access, WSL integration, network phases, and running a task package end to end |
 | [docs/harbor.md](docs/harbor.md) | What Harbor is, installing it, and running a dataset or a single task package from the CLI |
 | [docs/verifiers-v1-harbor.md](docs/verifiers-v1-harbor.md) | Verifiers v1 to Harbor: taskset, reward, artifact and separate-grader contracts, and current parity gaps |
 | [docs/harbor-task-structure.md](docs/harbor-task-structure.md) | Harbor task authoring: single-step layout, agentic runtime policy, verifier placement and reward output |
@@ -204,6 +205,50 @@ npx skills add harbor-framework/harbor --skill create-task
 
 Layout, `task.toml` fields, network policy and reward output are documented in
 [docs/harbor-task-structure.md](docs/harbor-task-structure.md).
+
+### Docker runtime for Harbor tasks
+
+Harbor talks to the Docker Engine API over a socket and builds each task's own
+image, so the process running it needs socket access and build permission.
+Verify before a first run:
+
+```bash
+wsl -e bash -lc "docker version --format '{{.Server.Version}}'"   # daemon reachable in WSL
+wsl -e bash -lc "ls -l /var/run/docker.sock"                      # srw-rw---- root docker
+wsl -e bash -lc "id -nG | tr ' ' '
+' | grep -x docker"           # you are in the group
+```
+
+If the daemon answers on Windows but not in WSL, enable this distro under
+Docker Desktop → **Settings → Resources → WSL integration**, then **Apply &
+restart**. If the socket is there but denied, add yourself to the group and
+restart the distro — never reach for `sudo harbor`, which leaves job artifacts
+your user cannot read:
+
+```bash
+sudo usermod -aG docker "$USER" && wsl --shutdown
+```
+
+Network policy is per phase. Task builds need egress for `apt-get` and `pip`,
+the agent phase needs its model provider, and verification runs with
+`no-network` so grading cannot depend on anything remote. Any `allowlist` phase
+makes Harbor build an egress-control sidecar on first use, which is why an
+initial run appears to pause shortly after starting.
+
+Build and run the first repaired task through Docker Desktop using the oracle
+agent, which applies the reference solution and needs no model credentials:
+
+```bash
+.venv-linux/bin/harbor run   -p data/holoskill-codeopt-v1/observer/codeopt-train-001   -e docker   -a oracle   --n-concurrent 1   -y
+```
+
+Start with `oracle`: it proves the image builds, tests run, the benchmark
+measures and the verifier writes a reward, without spending a token. Swap in
+`-a codex -m gpt-5.6-sol` with `OPENAI_API_KEY` set once it passes. Results land
+in `jobs/<timestamp>/<task>__<id>/`; read `trial.log` first when a run fails.
+
+Full setup, network-phase configuration and troubleshooting:
+[docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md).
 
 ### Multi-step Harbor tasks
 

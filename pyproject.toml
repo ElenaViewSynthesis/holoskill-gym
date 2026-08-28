@@ -12,6 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "ElenaViewSynthesis" }]
 
 dependencies = [
+    # Harbor's Daytona provider needs its SDK; the editable source pin below
+    # cannot carry an extra, so the SDK is depended on directly.
+    "daytona",
     "harbor",
     "openai>=1.40",
     "pydantic>=2.7",
