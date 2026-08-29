@@ -264,7 +264,8 @@ def test_cli_can_unset_seed_and_effort() -> None:
     ).reasoning_payload()
     assert payload == {"enabled": True, "max_tokens": 512}
     assert (
-        sampling_from_args(parser.parse_args(["--no-openrouter-reasoning"])).reasoning_enabled is False
+        sampling_from_args(parser.parse_args(["--no-openrouter-reasoning"])).reasoning_enabled
+        is False
     )
 
 

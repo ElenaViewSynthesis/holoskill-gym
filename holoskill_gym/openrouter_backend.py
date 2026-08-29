@@ -6,23 +6,24 @@ configured. The model is selected by ``OPENROUTER_MODEL``; the adapter itself
 is model-agnostic.
 
 Model selection is not free. The mutation call requires strict
-``json_schema`` output, and most OpenRouter models do not support it. Verified
-against the live catalogue on 2026-08-28:
+``json_schema``, and advertised support does not imply the model can produce a
+valid proposal. Probed against the live API rather than read from metadata:
 
-===========================================  =========  ==============
-model                                        free       response_format
-===========================================  =========  ==============
-``z-ai/glm-5.2:free``                        yes        yes
-``nvidia/nemotron-3-super-120b-a12b:free``   yes        yes
-``thinkingmachines/inkling``                 no         yes
-``thinkingmachines/inkling:free``            yes        no
-``thinkingmachines/inkling-small:free``      yes        no
-===========================================  =========  ==============
+===========================================  =========  ==============  =========
+model                                        free       response_format  proposal
+===========================================  =========  ==============  =========
+``openai/gpt-5.6-luna``                      no         yes             **yes**
+``z-ai/glm-5.2:free``                        yes        yes             rate limited
+``nvidia/nemotron-3-super-120b-a12b:free``   yes        yes             schema failure
+``dots-studio/dots-3-note-preview:free``     yes        yes             null content
+``liquid/lfm-2.5-2.6b:free``                 yes        yes             schema failure
+``thinkingmachines/inkling``                 no         yes             untested
+``thinkingmachines/inkling:free``            yes        no              n/a
+===========================================  =========  ==============  =========
 
-Advertised support is necessary, not sufficient: ``nemotron-3-super-120b``
-declares ``structured_outputs`` and still returned content failing schema
-validation, and ``glm-5.2:free`` exhausted six attempts on rate limiting.
-Local semantic validation runs regardless of which model is configured.
+Four models advertising ``structured_outputs`` cannot produce a valid proposal,
+which is why the last column exists and why ``supported_parameters`` is not a
+sufficient check. Local semantic validation runs regardless of model.
 
 The Inkling free variants additionally answer ``403 "only available on agentic
 harnesses"`` to any direct call, which :class:`OpenRouterAccessError`
@@ -48,26 +49,52 @@ from .holo_backend import (
 from .schemas import OptimizerCallRecord, ProposalResponse, SkillUpdateProposal
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+LUNA_MODEL = "openai/gpt-5.6-luna"
 GLM_MODEL = "z-ai/glm-5.2:free"
-NEMOTRON_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 INKLING_PAID_MODEL = "thinkingmachines/inkling"
 INKLING_FREE_MODEL = "thinkingmachines/inkling:free"
 
-# GLM 5.2 is the default because it is the only free model in the catalogue
-# that both advertises structured outputs and accepts the request shape.
-# Models without response_format cannot fill the mutation role at all.
-DEFAULT_OPENROUTER_MODEL = GLM_MODEL
+# GPT-5.6 Luna is the default: the first model probed that actually returns a
+# valid SkillUpdateProposal, on the first attempt, rather than merely
+# advertising structured output. Verified 2026-08-29: a valid proposal in
+# 43.5s on 426 tokens, attempts=1.
+#
+# It is paid ($0.20/M prompt, $1.20/M completion). That is the trade: every
+# free candidate either exhausted its retries on upstream saturation or failed
+# schema validation. GLM_MODEL remains selectable for a zero-cost run, with the
+# caveat that it has never completed a proposal.
+DEFAULT_OPENROUTER_MODEL = LUNA_MODEL
 
-# Models known to lack response_format; selecting one is a configuration
-# error rather than a runtime surprise.
-MODELS_WITHOUT_STRUCTURED_OUTPUT = frozenset(
-    {
-        "thinkingmachines/inkling:free",
-        "thinkingmachines/inkling-small:free",
-        "thinkingmachines/inkling-small",
-        "thinkingmachines/inkling:batch",
-    }
-)
+# Models that cannot fill the optimizer role, with the reason each was ruled
+# out. Selecting one is a configuration error, raised before any request is
+# sent rather than surfacing as a malformed proposal after tokens are spent.
+#
+# Two distinct causes, both established by probing rather than by reading
+# catalogue metadata -- `supported_parameters` proved unreliable, since three
+# of these advertise structured output and still cannot produce it.
+UNUSABLE_OPTIMIZER_MODELS: dict[str, str] = {
+    # No response_format support at all.
+    "thinkingmachines/inkling:free": "does not support response_format",
+    "thinkingmachines/inkling-small:free": "does not support response_format",
+    "thinkingmachines/inkling-small": "does not support response_format",
+    "thinkingmachines/inkling:batch": "does not support response_format",
+    # Advertises structured output; fails to produce a valid proposal.
+    "nvidia/nemotron-3-super-120b-a12b:free": (
+        "advertises structured_outputs but returned content failing schema "
+        "validation on every probe (2026-08-28, 2026-08-29)"
+    ),
+    "dots-studio/dots-3-note-preview:free": (
+        "advertises structured_outputs but returned null content within the "
+        "token budget (probed 2026-08-28)"
+    ),
+    "liquid/lfm-2.5-2.6b:free": (
+        "advertises structured_outputs but is too small to satisfy the "
+        "SkillUpdateProposal schema (probed 2026-08-28)"
+    ),
+}
+
+# Retained for callers that only need membership.
+MODELS_WITHOUT_STRUCTURED_OUTPUT = frozenset(UNUSABLE_OPTIMIZER_MODELS)
 
 # Defaults chosen for a *deterministic optimizer*, not for chat. OpenRouter's
 # own defaults (temperature 1, no seed) are wrong for this role: the optimizer
@@ -168,11 +195,12 @@ class OpenRouterBackendConfig:
             raise ValueError("OpenRouter base_url must not be empty")
         if not self.model.strip():
             raise ValueError("OpenRouter model must not be empty")
-        if self.model in MODELS_WITHOUT_STRUCTURED_OUTPUT:
+        if self.model in UNUSABLE_OPTIMIZER_MODELS:
             raise ValueError(
-                f"{self.model} does not support response_format and cannot "
-                "produce a strict SkillUpdateProposal; choose a model that "
-                f"does, for example {DEFAULT_OPENROUTER_MODEL}"
+                f"{self.model} cannot serve as an optimizer: "
+                f"{UNUSABLE_OPTIMIZER_MODELS[self.model]}. Choose a model that "
+                f"can, for example {DEFAULT_OPENROUTER_MODEL}, or use the Holo "
+                "backend, which is the supported production optimizer."
             )
         if self.timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
@@ -342,7 +370,7 @@ def _normalize_openrouter_error(
 
 
 def add_sampling_arguments(parser: Any, *, prefix: str = "openrouter") -> Any:
-    """Register Inkling sampling and reasoning parameters on an argparse parser.
+    """Register OpenRouter sampling and reasoning parameters on an argparse parser.
 
     Defaults match :class:`OpenRouterSampling` so the command line and the library
     cannot disagree. Values are tuning knobs that change what a run produces,
@@ -351,7 +379,7 @@ def add_sampling_arguments(parser: Any, *, prefix: str = "openrouter") -> Any:
 
     group = parser.add_argument_group(
         f"{prefix} sampling",
-        "Generation parameters for the Inkling optimizer. Defaults are chosen "
+        "Generation parameters for the OpenRouter optimizer. Defaults are chosen "
         "for a deterministic optimizer, not for chat.",
     )
     group.add_argument(
