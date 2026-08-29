@@ -23,6 +23,57 @@ update.
 | [docs/harbor-task-structure.md](docs/harbor-task-structure.md) | Harbor task authoring: single-step layout, agentic runtime policy, verifier placement and reward output |
 | [docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md) | Harbor's sequential multi-step task contract, documented as a future extension |
 
+## Papers and upstream projects
+
+The four components this project composes, with the citation each upstream
+repository asks for.
+
+| Component | Role here | Reference |
+|---|---|---|
+| **SEAGym** | Evaluator — checkpoints and measures, never accepts or rejects | [arXiv:2606.17546](https://arxiv.org/abs/2606.17546) |
+| **SkillOpt** | Method — owns the private held-out acceptance gate | [arXiv:2605.23904](https://arxiv.org/abs/2605.23904) · [project page](https://microsoft.github.io/SkillOpt/) |
+| **Harbor** | Execution — containerized task isolation and agent runs | [10.5281/zenodo.20953922](https://doi.org/10.5281/zenodo.20953922) · [tbench.ai](https://www.tbench.ai) |
+| **AlgoTune** | Candidate external task source (154 optimization tasks) | [arXiv:2507.15887](https://arxiv.org/abs/2507.15887) · [algotune.io](https://algotune.io/) |
+
+**On venues: none of these has one.** Every upstream citation is a preprint or a
+software record, not a peer-reviewed conference or journal paper — SEAGym is an
+arXiv `@misc` (cs.AI, 2026), SkillOpt and AlgoTune are both `@article` entries
+whose `journal` field reads *"arXiv preprint"*, and Harbor is an `@software`
+record with a Zenodo concept DOI. Any claim that one appeared at NeurIPS, ICLR,
+ICML or similar would not be supported by what these repositories state about
+themselves. Cite them as preprints.
+
+```bibtex
+@misc{zheng2026seagym,
+  title = {SEAGym: An Evaluation Environment for Self-Evolving LLM Agents},
+  author = {Zheng, Congjie and Xue, Chuanyi and Liang, Bin and Yang, Jun and Zhang, Changshui},
+  year = {2026}, eprint = {2606.17546}, archivePrefix = {arXiv}, primaryClass = {cs.AI}
+}
+
+@article{yang2026skillopt,
+  title = {SkillOpt: Executive Strategy for Self-Evolving Agent Skills},
+  author = {Yang, Yifan and Gong, Ziyang and Huang, Weiquan and others},
+  journal = {arXiv preprint arXiv:2605.23904}, year = {2026}
+}
+
+@software{Harbor_Framework,
+  author = {{Harbor Framework Team}},
+  title = {{Harbor: A framework for evaluating and optimizing agents and models in container environments}},
+  year = {2026}, doi = {10.5281/zenodo.20953922}
+}
+
+@article{press2025algotune,
+  title = {AlgoTune: Can Language Models Speed Up General-Purpose Numerical Programs?},
+  author = {Press, Ori and Amos, Brandon and Zhao, Haoyu and others},
+  journal = {arXiv preprint arXiv:2507.15887}, year = {2025},
+  doi = {10.48550/arXiv.2507.15887}
+}
+```
+
+Harbor's own citation records `version = {v0.16.1}`; this checkout pins
+**v0.22.0**, so cite the version actually used rather than the one in the
+upstream snippet.
+
 ## Vendored dependencies
 
 | Path | Upstream | Pinned at |
@@ -205,6 +256,225 @@ tasks does not drift apart:
 harbor tasks init "<task-name>" --metadata-template task-template.toml
 ```
 
+### Running a registry dataset
+
+Harbor ships a registry of **80 third-party benchmark datasets**, addressed as
+`name@version` rather than by path. Harbor is built by the creators of
+[Terminal-Bench](https://www.tbench.ai) and is the official harness for
+Terminal-Bench 2.0, which is why the registry is dominated by agent benchmarks
+adapted to a common task format.
+
+```bash
+harbor datasets list                                  # everything in the registry
+harbor run --dataset algotune@1.0 -a oracle -y        # credential-free, applies reference solutions
+harbor run --dataset algotune@1.0   --agent codex --model gpt-5.6-sol   --n-concurrent 1                                    # spends OPENAI_API_KEY
+```
+
+Start with `-a oracle` on a single task, exactly as with a local task package:
+it proves the image builds and the verifier scores without spending a token.
+
+**AlgoTune** (`algotune@1.0`) is the registry dataset closest to this project's
+own objective: **154 algorithm-optimization tasks** where the goal is to beat a
+reference implementation while producing identical output
+([paper](https://arxiv.org/abs/2507.15887), [site](https://algotune.io/)).
+Domains span linear algebra, signal processing, cryptography, graph algorithms,
+optimization and scientific computing.
+
+Its headline metric is the **AlgoTune Score — the harmonic mean of per-task
+speedups**, with a "mercy score" of 1.0 for a solution that fails validation or
+runs slower than baseline. That is *not* this project's
+`correct_speedup_geomean`. The harmonic mean is dominated by its smallest
+values, so it rewards broad improvement and punishes a single unimproved task
+far harder than a geometric mean does. Compare the two with:
+
+```bash
+python -m holoskill_gym.score --run-dir results/runs/<run>          # both, plus ratio
+python -m holoskill_gym.score --speedups 1.05 1.02 8.0 --statistic harmonic
+python -m holoskill_gym.score --run-dir results/runs/<run> --view id_test --json
+```
+
+Both statistics are computed from the same speedups, and their **ratio H/G** is
+the useful number: the harmonic mean is dominated by its *smallest* values while
+the geometric mean is not, so the gap between them measures how evenly the gain
+is spread.
+
+| Speedups | Harmonic (H) | Geometric (G) | H/G | Reading |
+|---|---:|---:|---:|---|
+| 2.1, 2.3, 2.0, 2.2 | 2.14 | 2.15 | **0.999** | Broad — every task improved. |
+| 1.05, 1.02, 8.0, 1.01 | 1.31 | 1.72 | **0.765** | Concentrated — one task carries the result. |
+| 1.0, 1.0, 1.0, 1.0 | 1.00 | 1.00 | **1.000** | No change anywhere. |
+
+Both of the first two rows could honestly be reported as "a solid speedup", and
+only the second is misleading. **H/G near 1.0 means the win is real across the
+set; well below 1.0 means one or two tasks are doing the work** and the skill
+probably did not generalize — which is exactly the claim a skill-evolution run
+is trying to make. `holoskill_gym.score` prints the ratio and warns below 0.9.
+
+This is also why a spurious zero is more damaging under the harmonic mean: one
+task scoring 0 sends the harmonic mean to 0 outright, while the geometric mean
+merely drops. See the memory note below for how a zero can arrive without any
+error being raised.
+
+**Resources.** Every AlgoTune task declares `cpus = 8`, `memory = "16G"`, and a
+3600 s agent and verifier timeout. **None of the 154 requires a GPU**, so no GPU
+provider or extra credentials are needed. Some other registry benchmarks do —
+`rexbench` declares GPUs in its task template, and `deveval`, `featurebench`,
+`ml-dev-bench`, `mlgym-bench`, `researchcodebench` and `scienceagentbench`
+document GPU requirements — so check before selecting one of those.
+
+The full list of the 154 tasks, with problem sizes, is in
+[docs/algotune-tasks.md](docs/algotune-tasks.md); the other 79 registry datasets
+are in [docs/harbor-registry-datasets.md](docs/harbor-registry-datasets.md).
+
+**Terminal-Bench 2.0** (`terminal-bench@2.0`, 89 tasks) runs with no adapter,
+since Harbor is its official harness — 4 easy, 55 medium, 30 hard, no GPUs; see
+[docs/terminal-bench-2-tasks.md](docs/terminal-bench-2-tasks.md). It is a
+**general agent benchmark, not a code-optimization one**: its tasks are pass/fail
+against their own verifiers and carry no before/after measurement, so they
+produce no `speedup` and neither `correct_speedup_geomean` nor `algotune_score`
+is defined over them. Useful here as a broad harness smoke test — it exercises
+image build, network policy and verifier plumbing across far more varied
+environments than the five synthetic canaries — but not as a task source for
+skill evolution.
+
+##### The ML-workload benchmarks
+
+Three more registry datasets come up because they mention GPUs. None is a good
+fit for skill evolution here, and the reasons differ:
+
+| Dataset | Tasks | What it measures | Why it does not fit |
+|---|---:|---|---|
+| `mlgym-bench@1.0` | 12 (11 surfaced) | Training ML models from scratch — CV, RL, tabular, game theory | Continuous score, but the objective is *model quality*, not code speed. Computationally heavy; CC-BY-NC-4.0, so **non-commercial research only**. |
+| `ml-dev-bench@1.0` | 33 | Real-world ML development workflows — dataset handling, debugging, finetuning | Workflow completion, not a measured before/after. |
+| `rexbench@1.0` | 2 | Extending a research paper's codebase | Only 2 tasks public. Needs an **A100 40 GB**; oracle verification alone takes ~2.5 h for `cogs`, ~45 min for `othello`. |
+
+All three are addressable by `--dataset`, so nothing needs installing — but all
+three need a GPU-capable provider, and none produces the correctness-gated
+speedup this project's reward is defined over. `rexbench` in particular is
+poorly matched: two tasks cannot support a train/test split, and an A100 for
+hours per trial is a different cost class from anything here.
+
+**`scienceagentbench` is a different case: it is not in the registry at all.**
+The Harbor tree vendors 87 adapters but the registry publishes 80 datasets, and
+this is one of the gap entries — the adapter exists (`adapters/scienceagentbench/`
+with `adapter.py`, `classify_tasks.py`, `llm_visual_judge.py`) but no dataset was
+published from it. So `--dataset scienceagentbench@...` cannot resolve.
+
+**You do not need to install it.** Doing so would mean running the adapter
+yourself to generate task packages from the upstream benchmark, then vendoring
+the output — real work, for a benchmark that scores scientific-analysis output
+via an LLM visual judge rather than a measured speedup. That reward is neither
+comparable to this project's nor reproducible in the way a benchmark harness
+needs. AlgoTune remains the right candidate.
+
+#### What a rollout costs, and how to estimate a run
+
+Measured phase timings from AlgoTune runs on this machine. The point of the
+table is that **the model is a minority of the wall time**:
+
+| Phase | Oracle (base64) | Oracle (convolve2d) | Codex, paid (convolve2d) |
+|---|---:|---:|---:|
+| Environment setup (image build) | 10.7 m | 2.8 m | 2.1 m |
+| Agent setup (Codex CLI install) | — | — | **3.3 m** |
+| Agent execution | — | — | 2.4 m |
+| Verifier (100 instances x 10 reps) | 0.7 m | 7.1 m | 3.3 m |
+| **Total** | **11.4 m** | **9.9 m** | **11.2 m** |
+
+Only ~2.4 of ~11 minutes is the agent working — roughly **20%**. The rest is
+image build, installing the Codex CLI inside each fresh container, and
+AlgoTune's interleaved timing protocol. Environment setup varies most: 10.7 m
+for a first-ever build against 2.1 m once Docker's layers are warm. The verifier
+varies by task, 0.7 m to 7.1 m.
+
+**Estimating a gated run.** Rollouts, not tasks, are the unit — the private gate
+scores both the current and the proposed skill on every gate task, so each gate
+task costs two rollouts:
+
+```text
+rollouts = train + validation + test + (2 x gate tasks)
+```
+
+The canary config (1 train, 1 validation, 1 test, 2 gate tasks) is 5 distinct
+tasks but **7 rollouts**, of which the gate is 4 — 57% of the run. At ~11-14 min
+each, sequential under `n_concurrent: 1`, that is **~1.5-2.5 hours**.
+
+Two levers if that is too slow. Pre-baking the Codex CLI into the task image
+removes 3.3 m per rollout — ~23 minutes over seven, a fifth of the run, and it
+also removes seven chances to hit the nvm/TLS flake that has already failed one
+job here. Dropping to one gate task takes 7 rollouts to 5. Raising
+`n_concurrent` is the tempting third option and the one to avoid: tasks declare
+8 CPUs and 16 GB against a smaller ceiling, so parallelism buys another silent
+OOM zero.
+
+#### Check the memory ceiling before running a registry task
+
+A task's `[environment]` block is a *declaration of need*, not a reservation.
+Harbor will start the container anyway, and the shortfall surfaces during
+verification, when peak memory is highest.
+
+```bash
+wsl -e bash -lc "docker info | grep -E 'Total Memory|CPUs'"   # what Docker can actually give
+grep -E '^(cpus|memory)' <task>/task.toml                     # what the task asks for
+```
+
+On this machine Docker exposes **7.6 GiB and 16 CPUs**, so an AlgoTune task's
+`cpus = 8` fits while its `memory = "16G"` cannot — roughly half of what the
+task was calibrated against.
+
+**The failure mode is quiet, which is the dangerous part.** An oracle run of
+`algotune-base64-encoding` finished with `n_errored_trials: 0`,
+`exception_info: null`, and `reward: 0.0`. The verifier ran for 41 s and
+returned — it did not time out, and nothing raised. The cause is in
+`verifier/test-stdout.txt`:
+
+```text
+../tests/test_outputs.py ./tests/test.sh: line 17:    62 Killed   pytest /tests/test_outputs.py -rA -s
+```
+
+`Killed` is the shell reporting SIGKILL, which inside a container means the OOM
+killer. Three things then combine to turn a crash into a plausible-looking
+score:
+
+1. `test.sh` writes `echo 0 > /logs/verifier/reward.txt` **before** running
+   anything, as a default.
+2. The performance test is wrapped in `set +e`, so the kill does not abort the
+   script.
+3. Nothing ever overwrites the default, so Harbor reads a well-formed reward of
+   `0`.
+
+**The zero is not produced by the failure — it is the pre-seeded default that
+never got replaced.**
+
+The memory arithmetic explains the kill. `algotune-base64-encoding` declares
+`algotune_problem_size = 49152`, and the solver's
+`DEFAULT_PLAINTEXT_MULTIPLIER` is 2048, so one problem instance is
+49,152 x 2,048 = 96 MiB of plaintext plus a 128 MiB Base64 copy — 224 MiB
+resident per instance. AlgoTune's protocol generates **100 instances per task**:
+
+| Instances resident | Memory |
+|---:|---:|
+| 1 | 0.2 GiB |
+| 10 | 2.2 GiB |
+| 100 | **21.9 GiB** |
+
+against a 7.6 GiB ceiling. The problem size was calibrated on a machine with the
+declared 16 GB; it is not survivable on half that.
+
+Treat an oracle scoring 0.0 as an infrastructure failure until proven otherwise.
+The oracle applies the reference solution, so it should score well by
+construction — and under a harmonic mean a single spurious zero drags the whole
+aggregate down far harder than under a geometric mean.
+
+Mitigations, in order of preference:
+
+1. **Raise the Docker VM's memory.** On Windows, set `memory=16GB` in
+   `%UserProfile%\.wslconfig` and run `wsl --shutdown`.
+2. **Pick a smaller task.** Problem sizes span 1 to 6,291,456; the small end
+   isolates verifier memory from cold-build behaviour and is the right choice
+   for a first smoke test.
+3. **Run on a provider with the headroom** rather than locally — though note the
+   Daytona caveat about egress under the current Harbor pin.
+
 Harbor also publishes a task-authoring skill for coding agents:
 
 ```bash
@@ -213,6 +483,124 @@ npx skills add harbor-framework/harbor --skill create-task
 
 Layout, `task.toml` fields, network policy and reward output are documented in
 [docs/harbor-task-structure.md](docs/harbor-task-structure.md).
+
+#### The checked-in task set
+
+`data/holoskill-codeopt-v1` holds five tasks. Each targets one bottleneck family
+on a single hot path, and every one is marked `benchmark_trust =
+"synthetic_canary"` — they exist to exercise the pipeline end to end, **not** to
+measure a skill's real quality.
+
+| Task | Split | Bottleneck family | Metric | Direction | Difficulty |
+|---|---|---|---|---|---|
+| `codeopt-train-001` | train | prefix-caching | `encode_throughput_units` | maximize | medium |
+| `codeopt-train-002` | train | async-batching | `scoring_throughput_units` | maximize | medium |
+| `codeopt-val-001` | val | redundant-serialization | `serialize_latency_units` | minimize | hard |
+| `codeopt-test-001` | test | concurrency-locking | `read_latency_units` | minimize | hard |
+| `codeopt-gate-001` | **private gate** | allocation | `buffer_latency_units` | minimize | medium |
+
+All five run credential-free under the `oracle` agent, which applies the
+reference solution — that is what the `harbor-oracle` CI matrix does on every
+push, proving each image builds, tests run, the benchmark measures and the
+verifier writes a reward without spending a token.
+
+**Note the limitation.** Five tasks means five *distinct* families, so no family
+recurs between train and test. Nothing here tests whether a skill generalizes
+within a family, which is the property the whole method depends on — a trusted
+external task set needs several independent repositories per family, with test
+repositories disjoint from train.
+
+### Execution controls and network policy
+
+`CliCodeOptRolloutAgent` executes nothing itself — Harbor owns checkout,
+sandboxing, CLI invocation and timeouts. What the rollout config controls is
+*how* the built-in Harbor agent is allowed to run, and those settings split into
+two layers that behave very differently.
+
+**Executor controls** are forwarded to the Harbor agent as `kwargs`. They shape
+the model: `reasoning_effort`, and for Claude Code also `allowed_tools`,
+`disallowed_tools`, `permission_mode`, `max_thinking_tokens`, `max_budget_usd`.
+The accepted set is per executor, because Codex and Claude Code expose different
+knobs. Getting one wrong costs tokens.
+
+**Execution controls** are never handed to the agent. They are applied to the
+SEAGym environment or asserted against the task package before the rollout
+starts, and they are the containment boundary. Getting one wrong lets an agent
+reach the network during grading, or lets raw provider transcripts land in a run
+directory.
+
+| Execution control | Effect |
+|---|---|
+| `agent_timeout_seconds` | Overrides `backend.agent_override_timeout_sec` for this rollout. |
+| `verifier_timeout_seconds` | Overrides `backend.verifier_override_timeout_sec`. |
+| `max_steps` | Agent step budget. Claude Code only — see below. |
+| `agent_network_mode` | Asserted against `[agent].network_mode` in `task.toml`. |
+| `verifier_network_mode` | Asserted against `[verifier].network_mode`. |
+| `raw_log_retention` | `"none"` adds Harbor `--agent-exclude-logs` / `--verifier-exclude-logs` patterns so raw transcripts stay out of the run directory. |
+
+#### Network policy is asserted, never set
+
+This is the part worth being precise about. `agent_network_mode` and
+`verifier_network_mode` do **not** configure Harbor. The task package's
+`task.toml` is the single source of truth for network policy; the rollout config
+only states what it believes that policy to be, and the run is refused when the
+two disagree.
+
+The consequence: **a SEAGym config can never widen a task's egress.** The only
+thing it can do is fail closed. Four cases are rejected before any container
+starts:
+
+1. **An unknown mode.** Only `no-network`, `allowlist` and `public` are accepted.
+2. **A declared/actual mismatch.** Config asks for `no-network` on the verifier
+   but the task says `allowlist` — rejected. The converse is rejected too: a task
+   *stricter* than the config asked for still means the run manifest would
+   misdescribe the conditions, and silent divergence in either direction
+   invalidates the result.
+3. **A missing declaration.** A task that omits `[agent].network_mode` or
+   `[verifier].network_mode` reads back as null, which never matches a requested
+   mode. An undeclared phase is rejected rather than inheriting the
+   `[environment]` baseline — whose effective default is `public`, which is
+   exactly the case where a silent inherit would do the most damage.
+4. **An uninspectable task.** No `local_path` and no `dataset_path` + `task_name`
+   pair means the policy cannot be read at all. An unreadable or malformed
+   `task.toml` is treated the same way: an unverifiable policy is a failed policy.
+
+`[environment].network_mode` is deliberately *not* asserted. It governs image
+build and container start, and task builds legitimately need `apt-get` and `pip`
+egress. What this guard protects is grading containment — that the verifier phase
+cannot reach the network, and that the agent phase reaches only what the task
+declared.
+
+The matrix configs all pair `"agent_network_mode": "allowlist"` with
+`"verifier_network_mode": "no-network"`, matching the checked-in tasks, whose
+`[agent].allowed_hosts` is limited to the model endpoints.
+
+#### `max_steps` and `max_turns`
+
+`max_steps` is this project's executor-neutral name for the agent step budget.
+Claude Code's Harbor agent spells the same limit `max_turns`, so the rollout
+agent bridges them: setting `max_steps` populates `max_turns`, and setting both
+to different values is a configuration error rather than a silent
+last-writer-wins.
+
+**`max_steps` is rejected for `codex_exec`.** At the Harbor revision pinned
+through SEAGym, the Codex agent exposes no step or turn cap, so accepting the key
+would advertise a budget that nothing enforces. This is why the `claude_*`
+configs carry `"max_steps": 50` and the `codex_*` configs carry none — the
+asymmetry is deliberate, not an oversight. Codex runs are bounded by
+`agent_timeout_seconds` instead.
+
+#### Credential isolation
+
+`from_config` also refuses to start when any of `HAI_API_KEY`, `HOLO_BASE_URL`
+or `HOLO_OPTIMIZER_MODEL` would be exported into a target rollout. SkillOpt
+drives the optimizer on the host; the target agent runs in Harbor's sandbox with
+only its own provider key. Overlap is fatal rather than warned about, because it
+would let the target read or bill the optimizer role and destroy the
+`role_separated_spend` accounting.
+
+All of the above is implemented and commented in
+[`holoskill_gym/rollout_agent.py`](holoskill_gym/rollout_agent.py).
 
 ### Docker runtime for Harbor tasks
 
@@ -277,6 +665,53 @@ step 1 rather than silently getting fresh sessions.
 Multi-step is **not yet supported** by the Verifiers v1 Harbor adapter, so it
 is not reachable from a SEAGym config today. See
 [docs/harbor-multi-step-tasks.md](docs/harbor-multi-step-tasks.md).
+
+### Storing runs and solutions
+
+`jobs/` and `results/` are gitignored and Harbor rewrites them per run, so a
+paid run's evidence is unrecoverable once the directory is cleaned. Two homes,
+by kind of data:
+
+- **Source belongs in git.** A solution worth keeping goes under `solutions/<task>/`
+  with a `PROVENANCE.md` recording job, trial, model, reward, token counts and
+  the `source_sha256`.
+- **Metrics belong in a database.** `db/schema.sql` defines `tasks`, `runs`,
+  `metrics` and `solutions` plus two views — `solution_leaderboard` and
+  `agent_vs_oracle`, the latter being the comparison that says whether an agent
+  beat the reference implementation and by how much.
+
+```bash
+docker run -d --name holoskill-pg   -e POSTGRES_USER=holoskill -e POSTGRES_PASSWORD=holoskill_local_dev   -e POSTGRES_DB=holoskill -p 5432:5432   -v holoskill-pgdata:/var/lib/postgresql/data --memory=512m postgres:17-alpine
+
+docker exec -i holoskill-pg psql -U holoskill -d holoskill < db/schema.sql
+scripts/ingest-run jobs/<job-name>              # parses reward, timings, solver source
+scripts/ingest-run jobs/<job-name> --dry-run    # inspect without a database
+```
+
+`ingest-run` reads a Harbor job directory and extracts the durable facts. It
+deliberately does **not** write complexity fields: nothing can derive a bound
+from source automatically, so `time_complexity`, `space_complexity` and
+`complexity_notes` are human annotations added afterwards and should be read as
+documentation that can be wrong.
+
+The database is local and its password is a development placeholder — it holds
+run metadata and agent-authored source, not credentials, and `scan-artifacts`
+still governs what may leave the machine.
+
+### Checking CI status
+
+`gh` is the tool for this; it is already installed and authenticated here.
+
+```bash
+gh run list --limit 5              # recent runs, with status and branch
+gh run watch                       # live-follow the in-flight run
+gh run view <id> --log-failed      # only the failing step's log, not the whole run
+```
+
+`gh run watch` blocks until the run finishes and **exits non-zero if it failed**,
+so it composes into a script or a `&&` chain rather than needing to be read by a
+human. `--log-failed` is the one to reach for first on a red run: it skips
+straight to the failing step instead of paging through a passing job's output.
 
 ### Maintenance
 
