@@ -17,3 +17,9 @@ results/
 jobs/
 runs/**/results/
 *.log
+
+# Personal interview/resume notes — not project documentation
+resume-bullets.md
+
+# Machine-specific launcher (absolute WSL paths)
+run-algotune-gated.sh
