@@ -149,8 +149,35 @@ def test_protected_edit_fails_before_final_tests(tmp_path) -> None:
     assert all(command.label != "final_test" for command in result.commands)
 
 
+def test_command_output_logs_are_bounded(tmp_path) -> None:
+    executable = tmp_path / "loud_agent.py"
+    executable.write_text(
+        """import sys
+
+sys.stdout.write("o" * 300_000)
+sys.stdout.flush()
+sys.stderr.write("e" * 300_000)
+sys.stderr.flush()
+""",
+        encoding="utf-8",
+    )
+
+    result = run_command(
+        [sys.executable, str(executable)],
+        cwd=tmp_path,
+        timeout_seconds=_startup_budget_seconds(),
+        artifact_dir=tmp_path / "artifacts",
+        label="loud_agent",
+    )
+
+    assert result.timed_out is False
+    assert result.exit_code == 0
+    assert Path(result.stdout_path).stat().st_size == MAX_COMMAND_OUTPUT_BYTES
+    assert Path(result.stderr_path).stat().st_size == MAX_COMMAND_OUTPUT_BYTES
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group lifecycle assertion")
-def test_fake_executable_timeout_terminates_process_group_and_bounds_logs(tmp_path) -> None:
+def test_fake_executable_timeout_terminates_process_group(tmp_path) -> None:
     executable = tmp_path / "fake_agent.py"
     executable.write_text(
         """from pathlib import Path
@@ -160,30 +187,29 @@ import time
 
 child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
 Path(sys.argv[1]).write_text(str(child.pid), encoding="utf-8")
-sys.stdout.write("o" * 300_000)
-sys.stdout.flush()
-sys.stderr.write("e" * 300_000)
-sys.stderr.flush()
 time.sleep(60)
 """,
         encoding="utf-8",
     )
     child_pid_path = tmp_path / "child.pid"
+    timeout_seconds = _startup_budget_seconds()
 
     result = run_command(
         [sys.executable, str(executable), str(child_pid_path)],
         cwd=tmp_path,
-        timeout_seconds=0.5,
+        timeout_seconds=timeout_seconds,
         artifact_dir=tmp_path / "artifacts",
         label="fake_agent",
         process_group_grace_seconds=0.1,
     )
 
     assert result.timed_out is True
-    assert result.timeout_reason == "command exceeded 0.5 seconds"
+    assert result.timeout_reason == f"command exceeded {timeout_seconds:g} seconds"
     assert result.exit_code is not None
-    assert Path(result.stdout_path).stat().st_size == MAX_COMMAND_OUTPUT_BYTES
-    assert Path(result.stderr_path).stat().st_size == MAX_COMMAND_OUTPUT_BYTES
+    assert child_pid_path.exists(), (
+        f"fake agent did not reach its pid write within {timeout_seconds:g}s; "
+        "the startup budget is too tight for this host"
+    )
     child_pid = int(child_pid_path.read_text(encoding="utf-8"))
     deadline = time.monotonic() + 3
     while _process_is_live(child_pid) and time.monotonic() < deadline:
@@ -204,6 +230,19 @@ def test_fake_executable_launch_failure_is_structured(tmp_path) -> None:
     assert result.timed_out is False
     assert result.launch_error is not None
     assert result.launch_error.startswith("FileNotFoundError:")
+
+
+def _startup_budget_seconds() -> float:
+    """Scale subprocess deadlines to measured interpreter startup on this host.
+
+    A fixed budget conflates "the command was cut off" with "the interpreter had
+    not finished booting yet", which turns these tests into load-sensitive
+    flakes on slow filesystems.
+    """
+
+    started = time.monotonic()
+    subprocess.run([sys.executable, "-c", "pass"], check=True, capture_output=True)
+    return max(2.0, (time.monotonic() - started) * 8)
 
 
 def _process_is_live(pid: int) -> bool:
