@@ -133,7 +133,9 @@ def read_algotune_outcome(result_path: str | None, rewards: dict[str, float]) ->
                 validity = parsed["validity"].strip().lower() == "true"
             if "raw_speedup" in parsed:
                 speedup = float(parsed["raw_speedup"])
-            baseline_time = float(parsed["baseline_time_s"]) if "baseline_time_s" in parsed else None
+            baseline_time = (
+                float(parsed["baseline_time_s"]) if "baseline_time_s" in parsed else None
+            )
             solver_time = float(parsed["solver_time_s"]) if "solver_time_s" in parsed else None
 
     return AlgoTuneOutcome(

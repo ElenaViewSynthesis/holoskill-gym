@@ -288,7 +288,9 @@ class OpenRouterBackend:
             )
         return self._client
 
-    def propose(self, *, system: str, user: str) -> ProposalResponse:
+    def propose(
+        self, *, system: str, user: str, schema: dict[str, Any] | None = None
+    ) -> ProposalResponse:
         """Request and parse one bounded update proposal."""
 
         started = self._clock()
@@ -315,7 +317,7 @@ class OpenRouterBackend:
                         "json_schema": {
                             "name": "skill_update_proposal",
                             "strict": True,
-                            "schema": SkillUpdateProposal.model_json_schema(),
+                            "schema": schema or SkillUpdateProposal.model_json_schema(),
                         },
                     },
                     extra_body=extra_body,

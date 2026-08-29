@@ -172,6 +172,18 @@ byte-identical. State commits use a replayable write-ahead transaction. Loading
 a checkpoint replays an interrupted skill/history/rejection/state commit
 idempotently before verifying its hash.
 
+Evaluation-point checkpoints store the validation results that were actually
+observed at that point. Resuming from an intermediate checkpoint therefore
+continues update assessment from the same comparison baseline instead of
+silently falling back to stale validation state.
+
+Method state uses schema version 2. Version-1 state is migrated in memory on
+load, hash-verified, then atomically rewritten. New state records resolved revisions and
+dirty/unknown status for this project, SkillOpt, SEAGym, and Harbor, plus hashes
+for the effective baseline config, initial skill, optimizer prompt, split
+manifest, private gate input, materialized task index and batch plan, and the
+safe rollout configuration (excluding credential values).
+
 ## Artifacts
 
 Important run paths include:

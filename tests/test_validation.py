@@ -22,8 +22,11 @@ Run the tests.
 def proposal(*edits: dict[str, object]) -> SkillUpdateProposal:
     return SkillUpdateProposal.model_validate(
         {
+            "schema_version": "2",
+            "action": "edit" if edits else "noop",
             "diagnosis": ["A measured weakness."],
             "edits": list(edits),
+            "noop_reason": None if edits else "No evidence-supported change remains.",
             "expected_effects": ["A measurable improvement."],
             "risks": ["Additional runtime."],
         }

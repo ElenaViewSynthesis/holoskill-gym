@@ -194,7 +194,9 @@ class HoloBackend:
         with self._records_lock:
             return tuple(self._records)
 
-    def propose(self, *, system: str, user: str) -> ProposalResponse:
+    def propose(
+        self, *, system: str, user: str, schema: dict[str, Any] | None = None
+    ) -> ProposalResponse:
         """Request and parse one bounded update proposal."""
 
         started = self._clock()
@@ -214,7 +216,7 @@ class HoloBackend:
                         "json_schema": {
                             "name": "skill_update_proposal",
                             "strict": True,
-                            "schema": SkillUpdateProposal.model_json_schema(),
+                            "schema": schema or SkillUpdateProposal.model_json_schema(),
                         },
                     },
                     timeout=self.config.timeout_seconds,

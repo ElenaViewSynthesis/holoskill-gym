@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, runtime_checkable
+from copy import deepcopy
+from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 
 class StrictModel(BaseModel):
@@ -16,43 +17,91 @@ class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class SkillEdit(StrictModel):
-    """One bounded edit to a named Markdown section in the skill document."""
+ShortText = Annotated[str, StringConstraints(min_length=1, max_length=1_000)]
+SectionName = Annotated[str, StringConstraints(min_length=1, max_length=200)]
+EditText = Annotated[str, StringConstraints(min_length=1, max_length=12_000)]
+EvidenceId = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 
-    operation: Literal["add", "delete", "replace"]
-    section: str = Field(min_length=1)
-    old_text: str | None
-    new_text: str | None
-    rationale: str = Field(min_length=1)
-    evidence_ids: list[str]
+
+class EditBase(StrictModel):
+    """Fields shared by every discriminated edit variant."""
+
+    section: SectionName
+    rationale: ShortText
+    evidence_ids: list[EvidenceId] = Field(min_length=1, max_length=16)
+
+
+class AddEdit(EditBase):
+    operation: Literal["add"]
+    old_text: None
+    new_text: EditText
+
+
+class DeleteEdit(EditBase):
+    operation: Literal["delete"]
+    old_text: EditText
+    new_text: None
+
+
+class ReplaceEdit(EditBase):
+    operation: Literal["replace"]
+    old_text: EditText
+    new_text: EditText
 
     @model_validator(mode="after")
-    def validate_operation_fields(self) -> SkillEdit:
-        if self.operation == "add":
-            if self.old_text is not None:
-                raise ValueError("add edits must set old_text to null")
-            if not self.new_text:
-                raise ValueError("add edits require non-empty new_text")
-        elif self.operation == "delete":
-            if not self.old_text:
-                raise ValueError("delete edits require non-empty old_text")
-            if self.new_text not in (None, ""):
-                raise ValueError("delete edits must set new_text to null or an empty string")
-        else:
-            if not self.old_text or not self.new_text:
-                raise ValueError("replace edits require non-empty old_text and new_text")
-            if self.old_text == self.new_text:
-                raise ValueError("replace edits must change the selected text")
+    def require_changed_text(self) -> ReplaceEdit:
+        if self.old_text == self.new_text:
+            raise ValueError("replace edits must change the selected text")
         return self
+
+
+SkillEdit = Annotated[AddEdit | DeleteEdit | ReplaceEdit, Field(discriminator="operation")]
 
 
 class SkillUpdateProposal(StrictModel):
     """Schema-constrained proposal returned by the optimizer."""
 
-    diagnosis: list[str]
-    edits: list[SkillEdit]
-    expected_effects: list[str]
-    risks: list[str]
+    schema_version: Literal["2"]
+    action: Literal["edit", "noop"]
+    diagnosis: list[ShortText] = Field(min_length=1, max_length=8)
+    edits: list[SkillEdit] = Field(max_length=3)
+    noop_reason: ShortText | None
+    expected_effects: list[ShortText] = Field(max_length=8)
+    risks: list[ShortText] = Field(max_length=8)
+
+    @model_validator(mode="after")
+    def validate_envelope(self) -> SkillUpdateProposal:
+        if self.action == "edit":
+            if not self.edits:
+                raise ValueError("edit proposals require at least one edit")
+            if self.noop_reason is not None:
+                raise ValueError("edit proposals must set noop_reason to null")
+        else:
+            if self.edits:
+                raise ValueError("noop proposals must have an empty edit list")
+            if self.noop_reason is None:
+                raise ValueError("noop proposals require noop_reason")
+        return self
+
+
+def proposal_json_schema(
+    *, evidence_ids: list[str] | tuple[str, ...], sections: list[str] | tuple[str, ...]
+) -> dict[str, Any]:
+    """Return a strict batch-specific schema with closed evidence and section enums."""
+
+    if not evidence_ids:
+        raise ValueError("proposal schema requires at least one evidence ID")
+    if not sections:
+        raise ValueError("proposal schema requires at least one skill section")
+    schema = deepcopy(SkillUpdateProposal.model_json_schema())
+    for definition in ("AddEdit", "DeleteEdit", "ReplaceEdit"):
+        properties = schema["$defs"][definition]["properties"]
+        properties["section"] = {"enum": sorted(set(sections)), "type": "string"}
+        properties["evidence_ids"]["items"] = {
+            "enum": sorted(set(evidence_ids)),
+            "type": "string",
+        }
+    return schema
 
 
 class OptimizerUsage(StrictModel):
@@ -128,7 +177,9 @@ class ProposalBackend(Protocol):
     @property
     def config(self) -> BackendIdentity: ...
 
-    def propose(self, *, system: str, user: str) -> ProposalResponse: ...
+    def propose(
+        self, *, system: str, user: str, schema: dict[str, Any] | None = None
+    ) -> ProposalResponse: ...
 
 
 class BackendIdentity(Protocol):

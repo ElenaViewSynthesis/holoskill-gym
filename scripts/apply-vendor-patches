@@ -56,6 +56,7 @@ apply_patch() {
 
 apply_patch reference/seagym seagym-redaction-usage-keys.patch
 apply_patch reference/seagym seagym-final-resume-idempotence.patch
+apply_patch reference/seagym seagym-intermediate-resume-validation-state.patch
 apply_patch reference/seagym/reference/harbor harbor-codex-atif-pricing-fallback.patch
 
 # Docker copies executable scripts byte-for-byte. On Windows-backed clones,

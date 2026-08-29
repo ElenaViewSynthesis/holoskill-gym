@@ -15,7 +15,7 @@
   "rollout_agent": {
     "name": "codex-codeopt-transfer",
     "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
-    "config": {"executor": "codex_exec", "model_ref": "rollout_model", "reasoning_effort": "medium", "n_attempts": 1, "attempt_modes": ["train"]},
+    "config": {"executor": "codex_exec", "model_ref": "rollout_model", "reasoning_effort": "medium", "n_attempts": 1, "attempt_modes": ["train"], "agent_network_mode": "allowlist", "verifier_network_mode": "no-network", "raw_log_retention": "none"},
     "models": {
       "rollout_model": {
         "model": "gpt-5.6-sol",

@@ -141,6 +141,120 @@ def test_reasoning_controls_are_mapped_and_recorded(tmp_path) -> None:
     assert agent.initialize(tmp_path).metadata["executor_controls"] == agent.agent_kwargs
 
 
+def test_claude_max_steps_maps_to_harbor_max_turns(tmp_path) -> None:
+    agent = CliCodeOptRolloutAgent.from_config(
+        name="codeopt",
+        config={"executor": "claude_code_exec", "max_steps": 7},
+        models={},
+        run_dir=tmp_path,
+        base_dir=tmp_path,
+    )
+
+    assert agent.agent_kwargs["max_turns"] == 7
+    assert agent.execution_controls == {"max_steps": 7}
+
+    with pytest.raises(ValueError, match="only for claude_code_exec"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "max_steps": 7},
+            models={},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+
+
+def test_attempt_policy_rejects_values_harbor_would_silently_clamp(tmp_path) -> None:
+    with pytest.raises(ValueError, match="n_attempts"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "n_attempts": 0},
+            models={},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+    with pytest.raises(ValueError, match="attempt_modes"):
+        CliCodeOptRolloutAgent.from_config(
+            name="codeopt",
+            config={"executor": "codex_exec", "attempt_modes": []},
+            models={},
+            run_dir=tmp_path,
+            base_dir=tmp_path,
+        )
+
+
+def test_rollout_applies_timeouts_log_policy_and_validates_task_network(tmp_path) -> None:
+    task_path = tmp_path / "task"
+    task_path.mkdir()
+    (task_path / "task.toml").write_text(
+        '[agent]\nnetwork_mode = "allowlist"\n[verifier]\nnetwork_mode = "no-network"\n',
+        encoding="utf-8",
+    )
+
+    class FakeHarborEnvironment:
+        agent_override_timeout_sec = None
+        verifier_override_timeout_sec = None
+
+        def __init__(self):
+            self.extra_args = []
+
+        def configure_agent_spec(self, spec):
+            self.spec = spec
+
+        def run_tasks(self, tasks, *, view_name, mode, agent_id):
+            return [
+                TaskRunResult(
+                    task_id=tasks[0].task_id,
+                    view_name=view_name,
+                    mode=mode,
+                    rewards={"reward": 1.0},
+                    score=1.0,
+                    success=True,
+                    refs={"trial_name": "attempt-1"},
+                )
+            ]
+
+    agent = CliCodeOptRolloutAgent.from_config(
+        name="codeopt",
+        config={
+            "executor": "codex_exec",
+            "agent_timeout_seconds": 30,
+            "verifier_timeout_seconds": 10,
+            "agent_network_mode": "allowlist",
+            "verifier_network_mode": "no-network",
+            "raw_log_retention": "none",
+        },
+        models={},
+        run_dir=tmp_path,
+        base_dir=tmp_path,
+    )
+    task_index = TaskIndex.from_dict(
+        {
+            "version": "test",
+            "tasks": [
+                {
+                    "task_id": "task-1",
+                    "source": {"type": "harbor", "local_path": str(task_path)},
+                    "attributes": {},
+                    "scoring": {},
+                }
+            ],
+        }
+    )
+    environment = FakeHarborEnvironment()
+
+    agent.rollout(
+        TaskBatch(task_ids=["task-1"], view_name="train", mode="train"),
+        env=environment,
+        task_index=task_index,
+        baseline_state=BaselineState(tmp_path, {}),
+    )
+
+    assert environment.agent_override_timeout_sec == 30
+    assert environment.verifier_override_timeout_sec == 10
+    assert environment.extra_args.count("--agent-exclude-logs") == 4
+    assert environment.extra_args.count("--verifier-exclude-logs") == 4
+
+
 def test_rollout_attaches_normalized_evidence_for_reporting_and_reflection(tmp_path) -> None:
     class FakeEnvironment:
         def run_tasks(self, tasks, *, view_name, mode, agent_id):

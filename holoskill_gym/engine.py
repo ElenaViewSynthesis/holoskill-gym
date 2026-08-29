@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -15,6 +16,7 @@ from .schemas import (
     ProposalBackend,
     ProposalResponse,
     ReflectionRecord,
+    proposal_json_schema,
 )
 from .trajectory import (
     EvidenceBudget,
@@ -150,6 +152,10 @@ class SkillOptHoloEngine:
                     evidence=evidence,
                     rejected_edit_buffer=rejected_edit_buffer,
                     evidence_budget=self._evidence_budget(),
+                ),
+                schema=proposal_json_schema(
+                    evidence_ids=evidence_ids,
+                    sections=_skill_sections(current_skill),
                 ),
             )
         except Exception as exc:
@@ -382,7 +388,8 @@ def _proposal_system_prompt(policy: ProposalPolicy) -> str:
         "For delete and replace, old_text must exactly match text inside the named "
         "Markdown section. For add, old_text must be null. Never include task IDs, "
         "repository-specific answers, benchmark outputs, secrets, or absolute paths "
-        "in new_text. Empty edits are valid when no safe general improvement exists."
+        "in new_text. Use action=noop, an empty edits list, and a concise noop_reason "
+        "when no safe general improvement exists; otherwise use action=edit and at least one edit."
     )
 
 
@@ -483,3 +490,13 @@ def _reject_decision(
         deployed_skill=current_skill,
         gate_task_ids=task_ids,
     )
+
+
+def _skill_sections(skill: str) -> list[str]:
+    sections = [
+        match.group(1).strip()
+        for match in re.finditer(r"^#{1,6}[ \t]+(.+?)[ \t]*$", skill, re.MULTILINE)
+    ]
+    if not sections:
+        raise ValueError("current skill must contain at least one Markdown heading")
+    return sections

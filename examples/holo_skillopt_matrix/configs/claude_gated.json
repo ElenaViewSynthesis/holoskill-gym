@@ -28,7 +28,7 @@
   "rollout_agent": {
     "name": "claude-codeopt",
     "class_path": "holoskill_gym.rollout_agent:CliCodeOptRolloutAgent",
-    "config": {"executor": "claude_code_exec", "model_ref": "rollout_model", "reasoning_effort": "medium", "n_attempts": 1, "attempt_modes": ["train"]},
+    "config": {"executor": "claude_code_exec", "model_ref": "rollout_model", "reasoning_effort": "medium", "max_steps": 50, "n_attempts": 1, "attempt_modes": ["train"], "agent_network_mode": "allowlist", "verifier_network_mode": "no-network", "raw_log_retention": "none"},
     "models": {
       "rollout_model": {
         "model": "anthropic/claude-sonnet-5",

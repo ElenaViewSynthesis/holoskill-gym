@@ -15,6 +15,8 @@ from typing import Any, Literal
 from harbor.models.trajectories import Trajectory as AtifTrajectory
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from .privacy import redact_sensitive_text, redact_sensitive_value
+
 EVIDENCE_SCHEMA_VERSION = "holoskill-evidence-v1"
 PROMPT_MAX_CHARS = 4_000
 MAX_ACTION_SUMMARIES = 128
@@ -736,7 +738,7 @@ def _source_fields(raw: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[st
 
 def _redact_source_value(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(key): _redact_source_value(item) for key, item in value.items()}
+        return redact_sensitive_value(dict(value))
     if isinstance(value, list | tuple):
         return [_redact_source_value(item) for item in value]
     if isinstance(value, str):
@@ -842,17 +844,7 @@ def _evidence_id(
 
 
 def _sanitize_text(value: str, *, max_chars: int) -> tuple[str, int]:
-    text = value.replace("\x00", "")
-    patterns = (
-        re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[^\s]+"),
-        re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
-        re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
-        re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]+\b"),
-    )
-    for pattern in patterns:
-        text = pattern.sub(
-            lambda match: (match.group(1) if match.lastindex else "") + "[REDACTED]", text
-        )
+    text = redact_sensitive_text(value)
     omitted = max(0, len(text) - max_chars)
     return text[:max_chars], omitted
 

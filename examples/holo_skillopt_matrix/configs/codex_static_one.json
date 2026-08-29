@@ -43,6 +43,9 @@
       "executor": "codex_exec",
       "model_ref": "rollout_model",
       "reasoning_effort": "medium",
+      "agent_network_mode": "allowlist",
+      "verifier_network_mode": "no-network",
+      "raw_log_retention": "none",
       "n_attempts": 1,
       "attempt_modes": [
         "train"

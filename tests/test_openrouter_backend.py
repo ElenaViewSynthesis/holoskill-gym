@@ -14,8 +14,11 @@ from holoskill_gym.openrouter_backend import (
 )
 
 PROPOSAL = {
+    "schema_version": "2",
+    "action": "noop",
     "diagnosis": ["Measurements are noisy."],
     "edits": [],
+    "noop_reason": "No evidence-supported edit is available.",
     "expected_effects": ["Stabler comparisons."],
     "risks": ["None."],
 }

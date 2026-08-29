@@ -601,16 +601,47 @@ Our pin `f7110f1a` is dated 2026-06-23 and predates it, so on this checkout
 `allowlist` silently degrades to public egress under `-e daytona`. This is a
 stale-pin problem, not a Harbor defect.
 
-- [ ] Bump `reference/seagym/reference/harbor` to v0.17.0 or later (upstream is
-      at v0.22.0) and re-verify all three vendor patches against the newer
-      tree. The Codex ATIF pricing patch is the one most likely to conflict,
+**The pin is inherited, not chosen.** Harbor is a dependency *of* SEAGym, not
+of this project:
+
+```text
+holoskill-gym                  first commit 2026-08-22
+  └── reference/seagym                 9e61e14  (2026-07-13)
+        └── reference/harbor           f7110f1a (2026-06-23)
+```
+
+We vendor SEAGym and Harbor arrives with it. `9e61e14` is still SEAGym's `main`
+today (`git rev-list --count 9e61e14..origin/main` is 0), so our SEAGym pin is
+current; SEAGym simply has not bumped its own Harbor pointer since June. The
+Daytona fix landed 2026-07-02 — nine days after the Harbor commit SEAGym points
+at, and eleven days *before* SEAGym's own latest commit, so SEAGym had the
+chance to pick it up and did not.
+
+**Caveat that makes this more than a version bump.** Overriding
+`reference/seagym/reference/harbor` puts us on a Harbor that SEAGym itself has
+never been tested against. SEAGym's code was written against the June API, and
+between `f7110f1a` and v0.22.0 there are six minor releases of a framework
+SEAGym calls directly for environments, agents, trial execution and ATIF
+production. A breakage would surface as SEAGym failing against Harbor, not as
+anything wrong in this repository, and would be ours to diagnose.
+
+Ranked by preference:
+
+- [ ] **Ask SEAGym to bump instead.** The clean fix is upstream: SEAGym raising
+      its own Harbor pointer, tested by the people who own the integration.
+      Worth an issue on antropy-research/SEAGym before doing it ourselves.
+- [ ] **If we override anyway**, bump to v0.17.0 rather than v0.22.0 — the
+      earliest release containing the Daytona fix, minimising the API surface
+      that moves. Re-verify all three vendor patches against the newer tree;
+      `harbor-codex-atif-pricing-fallback.patch` is the likeliest to conflict
       since it touches agent internals.
-- [ ] Until the bump lands, treat Daytona results as obtained under weaker
+- [ ] Treat the override as a SEAGym-compatibility change, not a Harbor
+      upgrade: re-run the deterministic smoke, the oracle canary on all five
+      packages, and the full suite. Record the Harbor SHA in the run manifest
+      so a later regression can be attributed.
+- [ ] Until any bump lands, treat Daytona results as obtained under weaker
       network containment than the equivalent Docker run, and record that in
       the run manifest.
-- [ ] Note that bumping Harbor may also move SEAGym's expectations of it;
-      re-run the deterministic smoke and the oracle canary after the bump
-      rather than assuming the interface is unchanged.
 
 **Snapshot invalidation is content-addressed, so a rebuilt image cannot go
 stale.** `snapshots.py:86-94` names auto snapshots

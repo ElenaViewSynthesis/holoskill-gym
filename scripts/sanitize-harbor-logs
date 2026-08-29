@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""Write bounded, redacted copies of Harbor diagnostic logs."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from holoskill_gym.privacy import load_known_secret_values, sanitize_failure_logs
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("source", type=Path)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--env-file", default=".env")
+    args = parser.parse_args()
+    env_file = Path(args.env_file)
+    if not env_file.is_absolute():
+        env_file = ROOT / env_file
+    written = sanitize_failure_logs(
+        args.source,
+        args.destination,
+        known_secret_values=load_known_secret_values(env_file),
+    )
+    print(f"wrote {len(written)} sanitized failure log(s)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import importlib
 import importlib.metadata
 import json
+import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,9 +21,10 @@ from seagym.baselines import (
     TrajectoryBatch,
     UpdateResult,
 )
+from seagym.data.datasets import load_task_index
 from seagym.data.types import TaskIndex
 
-from .configuration import load_project_environment
+from .configuration import load_project_environment, project_root
 from .engine import (
     EngineProposalValidationError,
     GateExecutionError,
@@ -61,7 +64,10 @@ class SkillOptHoloBaseline(BaseBaseline):
     gate_task_index: TaskIndex | None = field(default=None, repr=False)
     target_executor: str = "codex_exec"
     max_update_records: int | None = None
+    source_revisions: dict[str, dict[str, str | bool | None]] = field(default_factory=dict)
+    input_hashes: dict[str, str] = field(default_factory=dict)
     _runtime: _GateRuntime | None = field(default=None, init=False, repr=False)
+    _active_state: BaselineState | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_config(
@@ -167,6 +173,7 @@ class SkillOptHoloBaseline(BaseBaseline):
         evaluator_path = config.get("gate_evaluator_path")
         evaluator = _load_object(str(evaluator_path)) if evaluator_path else None
         gate_task_index = _load_gate_task_index(gate_path)
+        root = project_root()
         return cls(
             baseline_id=name,
             state_dir=state_dir,
@@ -181,6 +188,13 @@ class SkillOptHoloBaseline(BaseBaseline):
                 if config.get("max_update_records") in (None, "")
                 else int(config["max_update_records"])
             ),
+            source_revisions=_resolve_source_revisions(root),
+            input_hashes={
+                "baseline_config": _json_sha256(config),
+                "initial_skill": _file_sha256(initial_skill_path),
+                "private_gate": _file_sha256(gate_path),
+                "split_manifest": _file_sha256(split_path),
+            },
         )
 
     @property
@@ -194,24 +208,31 @@ class SkillOptHoloBaseline(BaseBaseline):
             raise ValueError("initial_skill_path is required")
         initial_skill = self.initial_skill_path.read_text(encoding="utf-8")
         optimizer_prompt_hash = prompt_sha256(engine.proposal_system_prompt())
+        input_hashes = {
+            **self.input_hashes,
+            "initial_skill": skill_sha256(initial_skill),
+            "optimizer_prompt": optimizer_prompt_hash,
+        }
         method_state = self.store.initialize(
             initial_skill=initial_skill,
             metadata={
                 "skillopt_version": _package_version("skillopt"),
-                "skillopt_commit": "e4ea6a6",
                 "seagym_version": _package_version("seagym"),
-                "seagym_commit": "9e61e14",
+                "harbor_version": _package_version("harbor"),
+                "source_revisions": self.source_revisions or _unknown_source_revisions(),
                 "holo_model_id": engine.backend.config.model,
                 "optimizer_prompt_hash": optimizer_prompt_hash,
                 "target_executor": self.target_executor,
                 "gate_mode": engine.config.gate_mode,
                 "task_split_hashes": guard.split_hashes(),
+                "input_hashes": input_hashes,
             },
         )
         self.update_index = method_state.last_committed_update
         metadata = self._baseline_metadata(method_state.model_dump(mode="json"))
         self._write_baseline_metadata(metadata)
-        return BaselineState(self.state_dir, metadata)
+        self._active_state = BaselineState(self.state_dir, metadata)
+        return self._active_state
 
     def update(self, trajectories: TrajectoryBatch, state: BaselineState) -> UpdateResult:
         engine, guard = self._requirements()
@@ -381,8 +402,31 @@ class SkillOptHoloBaseline(BaseBaseline):
     ) -> None:
         """Bind Harbor execution without exposing observer task data to the method."""
 
-        del task_index, run_dir, batch_plan
+        del run_dir
         self._runtime = _GateRuntime(env=env, rollout_agent=rollout_agent)
+        runtime_hashes: dict[str, str] = {}
+        if hasattr(task_index, "to_dict"):
+            runtime_hashes["task_index"] = _json_sha256(task_index.to_dict())
+        if batch_plan is not None and hasattr(batch_plan, "to_dict"):
+            runtime_hashes["batch_plan"] = _json_sha256(batch_plan.to_dict())
+        runtime_hashes["rollout_configuration"] = _json_sha256(
+            {
+                "type": type(rollout_agent).__name__,
+                "agent_id": getattr(rollout_agent, "agent_id", None),
+                "executor": getattr(rollout_agent, "executor", None),
+                "target_model": getattr(rollout_agent, "target_model", None),
+                "executor_controls": getattr(rollout_agent, "executor_controls", None),
+                "execution_controls": getattr(rollout_agent, "execution_controls", None),
+                "n_attempts": getattr(rollout_agent, "n_attempts", None),
+                "attempt_modes": getattr(rollout_agent, "attempt_modes", None),
+            }
+        )
+        method_state = self.store.update_input_hashes(runtime_hashes)
+        if self._active_state is not None:
+            self._active_state.metadata.update(
+                self._baseline_metadata(method_state.model_dump(mode="json"))
+            )
+        self._write_baseline_metadata(self._baseline_metadata(method_state.model_dump(mode="json")))
 
     def load_checkpoint(self, checkpoint: Checkpoint) -> BaselineState:
         state = super().load_checkpoint(checkpoint)
@@ -390,6 +434,7 @@ class SkillOptHoloBaseline(BaseBaseline):
         self.update_index = method_state.last_committed_update
         state.metadata.update(self._baseline_metadata(method_state.model_dump(mode="json")))
         self._write_baseline_metadata(state.metadata)
+        self._active_state = state
         return state
 
     def report(self, state: BaselineState) -> dict[str, Any]:
@@ -534,7 +579,13 @@ def _load_gate_task_index(path: Path) -> TaskIndex | None:
         for task in tasks
     ):
         return None
-    return TaskIndex.from_dict(data, path=path)
+    # Delegate to SEAGym's loader rather than calling TaskIndex.from_dict directly.
+    # from_dict does not touch source paths, so a relative dataset_path would stay
+    # relative and later resolve against the process working directory instead of
+    # the manifest's own directory -- pointing the gate outside the repository.
+    # load_task_index normalises against the manifest directory first, which is
+    # what the main task index already gets.
+    return load_task_index(path)
 
 
 def _package_version(name: str) -> str:
@@ -542,6 +593,77 @@ def _package_version(name: str) -> str:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
+
+
+def _resolve_source_revisions(root: Path) -> dict[str, dict[str, str | bool | None]]:
+    return {
+        "project": _git_revision(root),
+        "skillopt": _git_revision(root / "reference" / "skillopt"),
+        "seagym": _git_revision(root / "reference" / "seagym"),
+        "harbor": _git_revision(root / "reference" / "seagym" / "reference" / "harbor"),
+    }
+
+
+def _unknown_source_revisions() -> dict[str, dict[str, str | bool | None]]:
+    return {
+        name: {"commit": "unknown", "dirty": None}
+        for name in ("project", "skillopt", "seagym", "harbor")
+    }
+
+
+def _git_revision(path: Path) -> dict[str, str | bool | None]:
+    commit = _git_output(path, "rev-parse", "HEAD")
+    if commit is None:
+        return {"commit": "unknown", "dirty": None}
+
+    tracked = _git_returncode(path, "diff-index", "--quiet", "HEAD", "--")
+    untracked = _git_output(path, "ls-files", "--others", "--exclude-standard")
+    if tracked == 1 or bool(untracked):
+        dirty: bool | None = True
+    elif tracked == 0 and untracked is not None:
+        dirty = False
+    else:
+        dirty = None
+    return {"commit": commit, "dirty": dirty}
+
+
+def _git_output(path: Path, *args: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _git_returncode(path: Path, *args: str) -> int | None:
+    try:
+        return subprocess.run(
+            ["git", "-C", str(path), *args],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        ).returncode
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _all_observer_ids(guard: LeakageGuard) -> frozenset[str]:
@@ -564,6 +686,8 @@ def _safe_proposal_metadata(proposal: SkillUpdateProposal) -> dict[str, Any]:
     """Retain proposal structure without persisting arbitrary model text."""
 
     return {
+        "schema_version": proposal.schema_version,
+        "action": proposal.action,
         "diagnosis_count": len(proposal.diagnosis),
         "edit_count": len(proposal.edits),
         "expected_effect_count": len(proposal.expected_effects),

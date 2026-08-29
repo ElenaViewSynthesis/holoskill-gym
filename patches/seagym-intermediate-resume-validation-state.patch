@@ -1,0 +1,68 @@
+diff --git a/seagym/trainers/loops.py b/seagym/trainers/loops.py
+--- a/seagym/trainers/loops.py
++++ b/seagym/trainers/loops.py
+@@ -223,19 +223,28 @@ class UpdateValidationLoop:
+                     "train_batch_index": step,
+                     "num_train_tasks_seen": seen,
+                 }
++                current = engine.run_tasks(
++                    val_view,
++                    view_name="update_validation",
++                    mode="validation",
++                    evaluation_point=point,
++                )
++                update_assessment = engine.assess_update(current, previous_val_results)
++                previous_val_results = current
++                checkpoint_state = TrainerState(
++                    epoch=step // batches_per_epoch,
++                    train_batch_index=step,
++                    global_step=updates_completed,
++                    updates_completed=updates_completed,
++                    num_train_tasks_seen=seen,
++                    checkpoint_id=point.evaluation_point_id,
++                    previous_update_validation_results=[asdict(result) for result in previous_val_results],
++                )
+                 if step_checkpoint_id is None:
+                     checkpoint_ref = engine.save_checkpoint(
+                         point.evaluation_point_id,
+                         checkpoint_type="evaluation_point",
+-                        trainer_state=TrainerState(
+-                            epoch=step // batches_per_epoch,
+-                            train_batch_index=step,
+-                            global_step=updates_completed,
+-                            updates_completed=updates_completed,
+-                            num_train_tasks_seen=seen,
+-                            checkpoint_id=point.evaluation_point_id,
+-                            previous_update_validation_results=[asdict(result) for result in previous_val_results],
+-                        ),
++                        trainer_state=checkpoint_state,
+                         metadata=checkpoint_metadata,
+                     )
+                 else:
+@@ -243,25 +252,9 @@ class UpdateValidationLoop:
+                         point.evaluation_point_id,
+                         source_checkpoint_id=step_checkpoint_id,
+                         checkpoint_type="evaluation_point",
+-                        trainer_state=TrainerState(
+-                            epoch=step // batches_per_epoch,
+-                            train_batch_index=step,
+-                            global_step=updates_completed,
+-                            updates_completed=updates_completed,
+-                            num_train_tasks_seen=seen,
+-                            checkpoint_id=point.evaluation_point_id,
+-                            previous_update_validation_results=[asdict(result) for result in previous_val_results],
+-                        ),
++                        trainer_state=checkpoint_state,
+                         metadata={**checkpoint_metadata, "alias_of": step_checkpoint_id},
+                     )
+-                current = engine.run_tasks(
+-                    val_view,
+-                    view_name="update_validation",
+-                    mode="validation",
+-                    evaluation_point=point,
+-                )
+-                update_assessment = engine.assess_update(current, previous_val_results)
+-                previous_val_results = current
+                 print(
+                     "seagym progress: update validation finished "
+                     f"batch={step}/{len(train_batches)} assessment={update_assessment.get('label', 'unknown')}",

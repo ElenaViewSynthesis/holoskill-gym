@@ -13,11 +13,31 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .schemas import GateDecision, OptimizerUsage
 
-STATE_SCHEMA_VERSION = "1"
+STATE_SCHEMA_VERSION = "2"
 
 
 class StateIntegrityError(RuntimeError):
     """Raised when persisted skill bytes do not match state metadata."""
+
+
+class SourceRevision(BaseModel):
+    """Resolved source revision without assuming the checkout is clean."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    commit: str
+    dirty: bool | None = None
+
+
+class SourceRevisions(BaseModel):
+    """All source trees that affect a reproducible HoloSkill run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project: SourceRevision
+    skillopt: SourceRevision
+    seagym: SourceRevision
+    harbor: SourceRevision
 
 
 class SkillOptState(BaseModel):
@@ -25,19 +45,20 @@ class SkillOptState(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: Literal["1"] = STATE_SCHEMA_VERSION
+    schema_version: Literal["2"] = STATE_SCHEMA_VERSION
     skill_version: int = Field(default=0, ge=0)
     current_hash: str
     parent_hash: str | None = None
     skillopt_version: str
-    skillopt_commit: str
     seagym_version: str
-    seagym_commit: str
+    harbor_version: str
+    source_revisions: SourceRevisions
     holo_model_id: str
     optimizer_prompt_hash: str
     target_executor: str
     gate_mode: Literal["on", "off"]
     task_split_hashes: dict[str, str]
+    input_hashes: dict[str, str]
     accepted_count: int = Field(default=0, ge=0)
     rejected_count: int = Field(default=0, ge=0)
     cumulative_optimizer_usage: OptimizerUsage = Field(default_factory=OptimizerUsage)
@@ -75,15 +96,17 @@ class StateStore:
 
     def _load_verified(self) -> SkillOptState:
         try:
-            state = SkillOptState.model_validate_json(self.state_path.read_text(encoding="utf-8"))
+            state, migrated = _load_state_payload(self.state_path)
             skill = self.skill_path.read_text(encoding="utf-8")
-        except (OSError, ValueError) as exc:
+        except (OSError, TypeError, ValueError) as exc:
             raise StateIntegrityError(f"cannot load baseline state: {type(exc).__name__}") from exc
         actual = skill_sha256(skill)
         if actual != state.current_hash:
             raise StateIntegrityError(
                 f"deployed skill hash mismatch: state={state.current_hash}, actual={actual}"
             )
+        if migrated:
+            self._write_state(state)
         return state
 
     def read_skill(self) -> str:
@@ -92,6 +115,16 @@ class StateStore:
         if skill_sha256(skill) != state.current_hash:  # defensive against an intervening write
             raise StateIntegrityError("deployed skill changed while it was being read")
         return skill
+
+    def update_input_hashes(self, input_hashes: dict[str, str]) -> SkillOptState:
+        """Atomically add hashes for inputs materialized after initialization."""
+
+        current = self.load()
+        next_state = current.model_copy(
+            update={"input_hashes": {**current.input_hashes, **input_hashes}}
+        )
+        self._write_state(next_state)
+        return next_state
 
     def commit(
         self,
@@ -145,12 +178,15 @@ class StateStore:
         }
         history_content = _appended_jsonl(self.history_path, history)
         rejected_content = self.rejected_path.read_text(encoding="utf-8")
-        if rejected and proposal_record is not None:
+        if proposal_record is not None and (
+            rejected or status in {"invalid_proposal", "rejected_by_skillopt_gate"}
+        ):
             rejected_content = _appended_jsonl(
-                self.rejected_path, {"update_index": update_index, "proposal": proposal_record}
+                self.rejected_path,
+                {"update_index": update_index, "status": status, "proposal": proposal_record},
             )
         transaction = {
-            "schema_version": "1",
+            "schema_version": "2",
             "prior_current_hash": prior.current_hash,
             "prior_last_committed_update": prior.last_committed_update,
             "deployed_skill": deployed_skill,
@@ -177,12 +213,12 @@ class StateStore:
             return
         try:
             transaction = json.loads(self.transaction_path.read_text(encoding="utf-8"))
-            if transaction.get("schema_version") != "1":
+            if transaction.get("schema_version") not in {"1", "2"}:
                 raise ValueError("unsupported transaction schema")
-            next_state = SkillOptState.model_validate(transaction["next_state"])
-            current_state = SkillOptState.model_validate_json(
-                self.state_path.read_text(encoding="utf-8")
+            next_state = SkillOptState.model_validate(
+                _migrate_state_payload(transaction["next_state"])
             )
+            current_state, _ = _load_state_payload(self.state_path)
             prior_identity = (
                 transaction["prior_current_hash"],
                 int(transaction["prior_last_committed_update"]),
@@ -204,7 +240,7 @@ class StateStore:
         _atomic_unlink(self.transaction_path)
 
     def _apply_transaction(self, transaction: dict[str, Any]) -> None:
-        next_state = SkillOptState.model_validate(transaction["next_state"])
+        next_state = SkillOptState.model_validate(_migrate_state_payload(transaction["next_state"]))
         _atomic_write_text(self.skill_path, str(transaction["deployed_skill"]))
         _atomic_write_text(self.history_path, str(transaction["history_content"]))
         _atomic_write_text(self.rejected_path, str(transaction["rejected_content"]))
@@ -217,6 +253,47 @@ def skill_sha256(skill: str) -> str:
 
 def prompt_sha256(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def _load_state_payload(path: Path) -> tuple[SkillOptState, bool]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise TypeError("state payload must be an object")
+    migrated_payload = _migrate_state_payload(payload)
+    return SkillOptState.model_validate(migrated_payload), migrated_payload != payload
+
+
+def _migrate_state_payload(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise TypeError("state payload must be an object")
+    version = str(payload.get("schema_version", ""))
+    if version == STATE_SCHEMA_VERSION:
+        return dict(payload)
+    if version != "1":
+        raise ValueError(f"unsupported state schema version: {version or 'missing'}")
+
+    migrated = dict(payload)
+    skillopt_commit = str(migrated.pop("skillopt_commit", "unknown"))
+    seagym_commit = str(migrated.pop("seagym_commit", "unknown"))
+    migrated["schema_version"] = STATE_SCHEMA_VERSION
+    migrated.setdefault("harbor_version", "unknown")
+    migrated.setdefault(
+        "source_revisions",
+        {
+            "project": {"commit": "unknown", "dirty": None},
+            "skillopt": {"commit": skillopt_commit, "dirty": None},
+            "seagym": {"commit": seagym_commit, "dirty": None},
+            "harbor": {"commit": "unknown", "dirty": None},
+        },
+    )
+    input_hashes = {
+        "initial_skill": str(migrated.get("current_hash", "unknown")),
+        "optimizer_prompt": str(migrated.get("optimizer_prompt_hash", "unknown")),
+    }
+    for name, digest in dict(migrated.get("task_split_hashes") or {}).items():
+        input_hashes[f"task_split:{name}"] = str(digest)
+    migrated.setdefault("input_hashes", input_hashes)
+    return migrated
 
 
 def _add_usage(left: OptimizerUsage, right: OptimizerUsage) -> OptimizerUsage:

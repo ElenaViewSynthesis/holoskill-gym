@@ -20,6 +20,8 @@ from holoskill_gym.holo_backend import (
 )
 
 VALID_PROPOSAL = {
+    "schema_version": "2",
+    "action": "edit",
     "diagnosis": ["Measurements are noisy."],
     "edits": [
         {
@@ -31,6 +33,7 @@ VALID_PROPOSAL = {
             "evidence_ids": ["train-1"],
         }
     ],
+    "noop_reason": None,
     "expected_effects": ["Less measurement noise."],
     "risks": ["Longer runtime."],
 }

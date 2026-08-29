@@ -8,19 +8,33 @@ on:
 permissions:
   contents: read
 
+# SEAGym still records Harbor at f7110f1a (v0.15.0 + 33). We override that pin
+# here so CI builds the same Harbor the working tree does; without this the
+# submodule init below resets to the stale pin and the vendor patch will not
+# apply. Keep in sync with the tree: git -C reference/seagym/reference/harbor describe --tags
+env:
+  HARBOR_REF: v0.22.0
+
 jobs:
   unit:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Initialize required vendored dependencies
         run: |
           git submodule update --init reference/seagym reference/skillopt
           git -C reference/seagym submodule update --init reference/harbor
-      - uses: actions/setup-python@v5
+          git -C reference/seagym/reference/harbor fetch --tags --depth 1 origin "$HARBOR_REF"
+          git -C reference/seagym/reference/harbor checkout --quiet "$HARBOR_REF"
+          git -C reference/seagym/reference/harbor describe --tags
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      # setup-uv stopped publishing major/minor tags at v8; pin the exact version.
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install locked dependencies
@@ -33,39 +47,72 @@ jobs:
         run: |
           uv lock --check
           scripts/render-harbor-task-verifiers --check
+          git diff --check
       - name: Lint and test
         run: |
-          uv run ruff check holoskill_gym tests scripts/render-harbor-task-verifiers scripts/scan-artifacts
+          uv run ruff check holoskill_gym tests scripts/render-harbor-task-verifiers scripts/scan-artifacts scripts/sanitize-harbor-logs
           uv run pytest -q
 
   harbor-oracle:
     needs: unit
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        task:
-          - data/holoskill-codeopt-v1/observer/codeopt-train-001
-          - data/holoskill-codeopt-v1/observer/codeopt-train-002
-          - data/holoskill-codeopt-v1/observer/codeopt-val-001
-          - data/holoskill-codeopt-v1/observer/codeopt-test-001
-          - data/holoskill-codeopt-v1/private_gate/codeopt-gate-001
+        include:
+          - id: train-001
+            task: data/holoskill-codeopt-v1/observer/codeopt-train-001
+          - id: train-002
+            task: data/holoskill-codeopt-v1/observer/codeopt-train-002
+          - id: val-001
+            task: data/holoskill-codeopt-v1/observer/codeopt-val-001
+          - id: test-001
+            task: data/holoskill-codeopt-v1/observer/codeopt-test-001
+          - id: gate-001
+            task: data/holoskill-codeopt-v1/private_gate/codeopt-gate-001
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Initialize required vendored dependencies
         run: |
           git submodule update --init reference/seagym reference/skillopt
           git -C reference/seagym submodule update --init reference/harbor
-      - uses: actions/setup-python@v5
+          git -C reference/seagym/reference/harbor fetch --tags --depth 1 origin "$HARBOR_REF"
+          git -C reference/seagym/reference/harbor checkout --quiet "$HARBOR_REF"
+          git -C reference/seagym/reference/harbor describe --tags
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
       - name: Prepare patched Harbor
         run: bash scripts/apply-vendor-patches
       - name: Run credential-free oracle
         run: uv run harbor run -p "${{ matrix.task }}" -a oracle -y
-      - name: Scan generated artifacts
-        run: scripts/scan-artifacts jobs/
+      - name: Sanitize failure logs
+        id: sanitize-failure-logs
+        if: failure()
+        run: uv run python scripts/sanitize-harbor-logs jobs/ sanitized-logs/
+      - name: Scan raw generated artifacts (never upload)
+        id: raw-artifact-scan
+        if: always()
+        run: uv run python scripts/scan-artifacts jobs/
+      - name: Scan sanitized failure logs
+        id: sanitized-artifact-scan
+        if: always() && steps.sanitize-failure-logs.outcome == 'success'
+        run: uv run python scripts/scan-artifacts sanitized-logs/
+      - name: Retain sanitized failure logs
+        if: >-
+          always() && failure() &&
+          steps.sanitize-failure-logs.outcome == 'success' &&
+          steps.sanitized-artifact-scan.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: harbor-failure-${{ matrix.id }}
+          path: sanitized-logs/
+          if-no-files-found: ignore
+          retention-days: 7

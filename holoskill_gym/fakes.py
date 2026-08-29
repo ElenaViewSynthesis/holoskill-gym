@@ -37,20 +37,26 @@ class DeterministicBackendConfig:
 
 
 class DeterministicHoloBackend:
-    """Return the same evidence-linked improvement for identical input bytes."""
+    """Emit a reproducible four-update lifecycle keyed by epoch and batch."""
 
     def __init__(self) -> None:
         self.config = DeterministicBackendConfig()
         self.records: list[OptimizerCallRecord] = []
 
-    def propose(self, *, system: str, user: str) -> ProposalResponse:
-        del system
+    def propose(
+        self, *, system: str, user: str, schema: dict[str, Any] | None = None
+    ) -> ProposalResponse:
+        del system, schema
         match = re.search(r'"task_id"\s*:\s*"([^"]+)"', user)
         evidence_id = match.group(1) if match else "missing-evidence"
-        if "Run three times and compare the median." in user:
-            edits: list[dict[str, object]] = []
-        else:
-            edits = [
+        has_improvement = "Run three times and compare the median." in user
+        rejected_buffer_size = user.count('"update_index"')
+
+        if not has_improvement:
+            lifecycle_step = 0
+            action = "edit"
+            noop_reason = None
+            edits: list[dict[str, object]] = [
                 {
                     "operation": "replace",
                     "section": "Measure",
@@ -60,10 +66,46 @@ class DeterministicHoloBackend:
                     "evidence_ids": [evidence_id],
                 }
             ]
+        elif rejected_buffer_size == 0:
+            lifecycle_step = 1
+            action = "edit"
+            noop_reason = None
+            edits = [
+                {
+                    "operation": "replace",
+                    "section": "Measure",
+                    "old_text": "Run three times and compare the median.",
+                    "new_text": "Run five times and compare the median.",
+                    "rationale": "More samples may reduce noise.",
+                    "evidence_ids": ["outside-current-training-batch"],
+                }
+            ]
+        elif rejected_buffer_size == 1:
+            lifecycle_step = 2
+            action = "edit"
+            noop_reason = None
+            edits = [
+                {
+                    "operation": "replace",
+                    "section": "Measure",
+                    "old_text": "Run three times and compare the median.",
+                    "new_text": "Run once.",
+                    "rationale": "A shorter measurement stage reduces wall time.",
+                    "evidence_ids": [evidence_id],
+                }
+            ]
+        else:
+            lifecycle_step = 3
+            action = "noop"
+            noop_reason = "No remaining evidence-supported change improves the deployed skill."
+            edits: list[dict[str, object]] = []
         proposal = SkillUpdateProposal.model_validate(
             {
+                "schema_version": "2",
+                "action": action,
                 "diagnosis": ["Single measurements are noisy."],
                 "edits": edits,
+                "noop_reason": noop_reason,
                 "expected_effects": ["More stable performance comparisons."],
                 "risks": ["The measurement stage takes longer."],
             }
@@ -73,7 +115,7 @@ class DeterministicHoloBackend:
             model=self.config.model,
             latency_ms=0,
             attempts=1,
-            response_id="deterministic-proposal",
+            response_id=f"deterministic-proposal-{lifecycle_step + 1}",
             finish_reason="stop",
             usage=OptimizerUsage(prompt_tokens=10, completion_tokens=10, total_tokens=20),
         )

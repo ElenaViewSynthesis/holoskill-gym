@@ -15,7 +15,7 @@
     "val_size": 1,
     "test_size": 1,
     "batch_size": 1,
-    "num_epochs": 1,
+    "num_epochs": 2,
     "num_updates_per_batch": 1
   },
   "dataloader": {

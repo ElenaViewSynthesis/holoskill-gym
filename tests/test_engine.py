@@ -21,6 +21,8 @@ Run once.
 
 
 PROPOSAL = {
+    "schema_version": "2",
+    "action": "edit",
     "diagnosis": ["One sample is noisy."],
     "edits": [
         {
@@ -32,6 +34,7 @@ PROPOSAL = {
             "evidence_ids": ["train-1"],
         }
     ],
+    "noop_reason": None,
     "expected_effects": ["Less noise."],
     "risks": ["Longer runtime."],
 }

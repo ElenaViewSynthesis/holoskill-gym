@@ -5,25 +5,25 @@ from pathlib import Path
 
 import pytest
 from seagym.cli import main as seagym_main
+from seagym.trainers.engine import ExecutionEngine
 from seagym.utils import read_jsonl
 
 from holoskill_gym.baseline import SkillOptHoloBaseline
 from holoskill_gym.engine import SkillOptHoloEngine
 from holoskill_gym.fakes import DeterministicHoloBackend
+from holoskill_gym.privacy import scan_artifact_tree
 
 ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = ROOT / "examples" / "holo_skillopt_deterministic"
 
 
-@pytest.fixture(scope="module")
-def completed_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
-    workspace = tmp_path_factory.mktemp("trainer-integration")
+def _write_test_config(workspace: Path, *, experiment_id: str) -> Path:
     config_path = workspace / "config.json"
     config = json.loads((EXAMPLE / "config.json").read_text(encoding="utf-8"))
-    config["experiment_id"] = "holo_skillopt_trainer_integration"
+    config["experiment_id"] = experiment_id
     config["task_dataset"]["path"] = str(EXAMPLE / "tasks" / "task_index.json")
     config["split_manifest"]["path"] = str(EXAMPLE / "splits" / "split.json")
-    config["schedule"]["train_size"] = 1
+    config["schedule"]["train_size"] = 2
     baseline = config["baseline"]["config"]
     baseline["initial_skill_path"] = str(EXAMPLE / "skills" / "initial_skill.md")
     baseline["skillopt_gate_path"] = str(EXAMPLE / "tasks" / "skillopt_gate.json")
@@ -31,6 +31,16 @@ def completed_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]
     config["rollout_agent"]["config"]["fixture_root"] = str(ROOT / "fixtures")
     config["output"]["run_dir"] = str(workspace / "unused-config-run")
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return config_path
+
+
+@pytest.fixture(scope="module")
+def completed_run(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    workspace = tmp_path_factory.mktemp("trainer-integration")
+    config_path = _write_test_config(
+        workspace,
+        experiment_id="holo_skillopt_trainer_integration",
+    )
     run_dir = workspace / "train-run"
 
     seagym_main(
@@ -65,15 +75,51 @@ def test_completed_run_has_normalized_verifier_and_optimizer_cost_records(comple
         "output_tokens": 15,
         "total_tokens": 30,
     }
-    assert metrics["candidate_acceptance_rate"]["value"] == 1.0
+    assert [row["update_summary"]["status"] for row in update_rows] == [
+        "accepted_by_skillopt_gate",
+        "invalid_proposal",
+        "rejected_by_skillopt_gate",
+        "no_op_proposal",
+    ]
+    assert metrics["candidate_acceptance_rate"]["value"] == 0.5
+    assert metrics["candidate_acceptance_rate"]["disposition_counts"] == {
+        "accepted_by_skillopt_gate": 1,
+        "applied_gate_off_ablation": 0,
+        "gate_execution_error": 0,
+        "invalid_proposal": 1,
+        "no_op_proposal": 1,
+        "optimizer_error": 0,
+        "rejected_by_skillopt_gate": 1,
+    }
     assert metrics["gate_off_application_rate"]["private_gate_acceptance"] is False
     assert metrics["forbidden_edit_rate"]["value"] == 0.0
     assert metrics["reliability_rates"]["timeout_or_infra_failure_rate"] == 0.0
     assert metrics["correct_speedup_geomean"]["num_correct_runs"] > 0
     assert "tokens" not in metrics
     assert metrics["role_separated_spend"]["target"]["total_tokens"] == 0.0
-    assert metrics["role_separated_spend"]["optimizer"]["total_tokens"] == 30.0
+    assert metrics["role_separated_spend"]["optimizer"]["total_tokens"] == 120.0
     assert "overall" not in metrics["role_separated_spend"]
+
+
+def test_completed_deterministic_run_artifacts_are_secret_free(completed_run) -> None:
+    _, run_dir = completed_run
+
+    assert scan_artifact_tree(run_dir) == []
+    state = json.loads(
+        (run_dir / "agent_state" / "skillopt_holo" / "state.json").read_text(encoding="utf-8")
+    )
+    assert state["schema_version"] == "2"
+    assert {"project", "skillopt", "seagym", "harbor"} == set(state["source_revisions"])
+    assert {
+        "baseline_config",
+        "initial_skill",
+        "optimizer_prompt",
+        "private_gate",
+        "split_manifest",
+        "task_index",
+        "batch_plan",
+        "rollout_configuration",
+    } <= set(state["input_hashes"])
 
 
 def test_checkpoint_eval_never_invokes_optimizer_or_baseline_update(
@@ -137,3 +183,73 @@ def test_final_checkpoint_resume_is_idempotent(completed_run) -> None:
     assert len(read_jsonl(updates_path)) == update_count
     assert len(read_jsonl(metric_inputs_path)) == metric_input_count
     assert {path: path.read_bytes() for path in stable_paths} == before
+
+
+def test_intermediate_checkpoint_resume_preserves_lifecycle_state(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "intermediate-resume"
+    workspace.mkdir()
+    config_path = _write_test_config(
+        workspace,
+        experiment_id="holo_skillopt_intermediate_resume",
+    )
+    run_dir = workspace / "train-run"
+    original_run_tasks = ExecutionEngine.run_tasks
+    train_calls = 0
+
+    def interrupt_before_third_train_batch(self, task_ids, **kwargs):
+        nonlocal train_calls
+        if kwargs.get("mode") == "train":
+            train_calls += 1
+            if train_calls == 3:
+                raise RuntimeError("simulated interruption after E_2")
+        return original_run_tasks(self, task_ids, **kwargs)
+
+    monkeypatch.setattr(ExecutionEngine, "run_tasks", interrupt_before_third_train_batch)
+    with pytest.raises(RuntimeError, match="simulated interruption"):
+        seagym_main(
+            [
+                "train",
+                str(config_path),
+                "--run-dir",
+                str(run_dir),
+                "--overwrite",
+            ]
+        )
+
+    checkpoint_path = run_dir / "checkpoints" / "E_2" / "checkpoint.json"
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["trainer_state"]["train_batch_index"] == 2
+    assert checkpoint["trainer_state"]["updates_completed"] == 2
+    assert checkpoint["trainer_state"]["previous_update_validation_results"]
+
+    monkeypatch.setattr(ExecutionEngine, "run_tasks", original_run_tasks)
+    seagym_main(
+        [
+            "train",
+            str(config_path),
+            "--run-dir",
+            str(run_dir),
+            "--resume-from-checkpoint",
+            "E_2",
+        ]
+    )
+
+    updates = read_jsonl(run_dir / "records" / "agent_updates.jsonl")
+    assert [row["global_update_index"] for row in updates] == [1, 2, 3, 4]
+    assert [row["summary"]["status"] for row in updates] == [
+        "accepted_by_skillopt_gate",
+        "invalid_proposal",
+        "rejected_by_skillopt_gate",
+        "no_op_proposal",
+    ]
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert metrics["candidate_acceptance_rate"]["disposition_counts"] == {
+        "accepted_by_skillopt_gate": 1,
+        "applied_gate_off_ablation": 0,
+        "gate_execution_error": 0,
+        "invalid_proposal": 1,
+        "no_op_proposal": 1,
+        "optimizer_error": 0,
+        "rejected_by_skillopt_gate": 1,
+    }
+    assert (run_dir / "reports" / "summary.md").is_file()
