@@ -1,7 +1,8 @@
 diff --git a/src/harbor/agents/installed/codex.py b/src/harbor/agents/installed/codex.py
+index 1f599fef..ceebc758 100644
 --- a/src/harbor/agents/installed/codex.py
 +++ b/src/harbor/agents/installed/codex.py
-@@ -498,8 +498,11 @@ class Codex(BaseInstalledAgent):
+@@ -741,8 +741,11 @@ class Codex(BaseInstalledAgent):
  
          try:
              import litellm
@@ -14,17 +15,19 @@ diff --git a/src/harbor/agents/installed/codex.py b/src/harbor/agents/installed/
 +            )
              return None
  
-         pricing: dict[str, Any] | None = None
+         pricing_model_name: str | None = None
 diff --git a/tests/unit/agents/installed/test_codex_trajectory.py b/tests/unit/agents/installed/test_codex_trajectory.py
+index f3f0741c..32c5688a 100644
 --- a/tests/unit/agents/installed/test_codex_trajectory.py
 +++ b/tests/unit/agents/installed/test_codex_trajectory.py
-@@ -1,10 +1,26 @@
+@@ -1,5 +1,6 @@
  """Unit tests for Codex ATIF trajectory conversion."""
  
 +import builtins
  import json
  
- from harbor.agents.installed.codex import Codex
+ import pytest
+@@ -8,6 +9,21 @@ from harbor.agents.installed.codex import Codex
  
  
  class TestCodexTrajectoryConversion:
