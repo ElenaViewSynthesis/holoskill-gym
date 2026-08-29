@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .metrics import geometric_mean_speedup
+from .metrics import geometric_mean_speedup, harmonic_mean_speedup
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,45 @@ class CorrectSpeedupGeomeanMetric:
             "by_view": {
                 view: {
                     "value": geometric_mean_speedup(values),
+                    "num_correct_runs": len(values),
+                }
+                for view, values in sorted(grouped.items())
+            },
+        }
+
+
+@dataclass(frozen=True)
+class AlgoTuneScoreMetric:
+    """AlgoTune Score: harmonic mean of correct per-task speedups.
+
+    Registered alongside ``correct_speedup_geomean`` rather than replacing it.
+    The two answer different questions -- the geometric mean asks how large the
+    typical win is, the harmonic mean asks whether the win is broad -- and a gap
+    between them localises the gain to a few tasks.
+    """
+
+    name: str = "algotune_score"
+    mercy_score: float = 1.0
+
+    def compute(self, records: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+        del config
+        grouped: dict[str, list[float]] = defaultdict(list)
+        for row, evidence in _task_evidence(records):
+            if not _correct_and_valid(evidence):
+                continue
+            speedup = _finite_positive((evidence.get("benchmark") or {}).get("speedup"))
+            if speedup is not None:
+                grouped[_view_key(row)].append(speedup)
+        all_values = [value for values in grouped.values() for value in values]
+        return {
+            "value": harmonic_mean_speedup(all_values, mercy_score=self.mercy_score),
+            "geometric_mean": geometric_mean_speedup(all_values),
+            "mercy_score": self.mercy_score,
+            "num_correct_runs": len(all_values),
+            "by_view": {
+                view: {
+                    "value": harmonic_mean_speedup(values, mercy_score=self.mercy_score),
+                    "geometric_mean": geometric_mean_speedup(values),
                     "num_correct_runs": len(values),
                 }
                 for view, values in sorted(grouped.items())

@@ -46,6 +46,38 @@ def geometric_mean_speedup(values: Sequence[float]) -> float:
     return math.exp(sum(math.log(value) for value in values) / len(values))
 
 
+def harmonic_mean_speedup(values: Sequence[float], *, mercy_score: float = 1.0) -> float:
+    """Return the AlgoTune Score: harmonic mean of per-task speedups.
+
+    This is *not* interchangeable with :func:`geometric_mean_speedup`. The
+    harmonic mean is dominated by the smallest values, so a single task that
+    fails to improve caps the aggregate far more sharply than the geometric
+    mean does. AlgoTune uses it deliberately: it rewards broad improvement over
+    a spectacular win on one task, which the geometric mean would let through.
+
+    ``mercy_score`` is AlgoTune's floor for a solution that fails validation or
+    runs slower than the reference. Non-positive samples are raised to it rather
+    than rejected, matching the upstream protocol; pass ``mercy_score=0`` only if
+    you intend a failed task to zero the aggregate.
+
+    Reporting both statistics side by side is the point. A harmonic mean well
+    below the geometric mean means the gain is concentrated in a few tasks.
+    """
+
+    if not values:
+        return 0.0
+    if not math.isfinite(mercy_score) or mercy_score < 0:
+        raise ValueError("mercy_score must be finite and non-negative")
+    floored: list[float] = []
+    for value in values:
+        if not math.isfinite(value):
+            raise ValueError("speedups must be finite")
+        floored.append(max(float(value), mercy_score))
+    if any(value <= 0 for value in floored):
+        return 0.0
+    return len(floored) / sum(1.0 / value for value in floored)
+
+
 def latency_delta_pct(*, before: float, after: float) -> float:
     """Return raw latency change; negative values are improvements."""
 
