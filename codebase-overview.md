@@ -165,8 +165,17 @@ same completion budget, so sizing `max_completion_tokens` is the only control.
 |---|---|---|---|
 | `holo3-1-35b-a3b` | yes, 10 req/min | yes | 4,096 |
 
-Two optimizer backends are supported. They are alternatives, never both in
-one run, and `optimizer_backend` selects between them:
+**Holo is the supported production optimizer.** Two backends exist and
+`optimizer_backend` selects between them.
+
+The OpenRouter adapter is proven end to end on a paid model:
+`openai/gpt-5.6-luna` returned a valid `SkillUpdateProposal` on the first
+attempt (2026-08-29). No *free* model can: four either exhausted their retries
+on upstream saturation or failed schema validation despite advertising
+`structured_outputs`, and are rejected at configuration time. Luna is therefore
+a real alternative optimizer, at $0.20/M prompt and $1.20/M completion.
+
+The two alternatives, never both in one run:
 
 | `optimizer_backend` | Model | Pinned by |
 |---|---|---|

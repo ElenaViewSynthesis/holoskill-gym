@@ -13,6 +13,17 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 ---
 
+## Next fresh terminal session
+
+- [ ] One boundary remains: the checked-in tasks are synthetic integration
+      canaries, not trusted production benchmark data. The paid gated
+      “production” canary is staged but must not be launched until a trusted
+      external task set and private gate are supplied. The rationale and
+      SkillOpt trade-offs are recorded in
+      [docs/skillopt-decision.md](docs/skillopt-decision.md#decision).
+
+---
+
 ## Priority implementation roadmap
 
 ### 1. Resolve specification and roadmap drift
@@ -577,33 +588,29 @@ is a direct dependency in `pyproject.toml`. Installed version 0.207.0;
       `backend.n_concurrent`, which governs SEAGym runs rather than direct
       `harbor run` invocations.
 
-**Harbor's Daytona adapter drops `allowed_hosts`. Decide the policy before
-the first Daytona run.**
+**Daytona allowlist support requires Harbor v0.17.0+; our pin is older.**
 
-Daytona is a fully supported Harbor environment. The gap is in the adapter, not
-the platform: Daytona's SDK exposes
-`CreateSandboxFromImageParams(network_block_all, network_allow_list)`, but
-Harbor only ever passes `network_block_all`. `grep -rn "network_allow_list"
-src/harbor/` returns nothing, and nothing under `environments/daytona/` or the
-shared `dind_compose.py` references egress or `allowed_hosts`. The egress
-sidecar is wired only at `environments/docker/docker.py:359`.
+Corrected 2026-08-29 after maintainer feedback on
+[harbor#2979](https://github.com/harbor-framework/harbor/issues/2979). Daytona
+network policy support landed in
+[#2147](https://github.com/harbor-framework/harbor/pull/2147) (`60d4374d`,
+2026-07-02) and shipped in v0.17.0, handling both `domain_allow_list` for
+hostnames and `network_allow_list` for CIDRs.
 
-| `network_mode` | `-e docker` | `-e daytona` |
-|---|---|---|
-| `no-network` | blocked | blocked |
-| `allowlist` | enforced by the sidecar | **degrades to public network** |
+Our pin `f7110f1a` is dated 2026-06-23 and predates it, so on this checkout
+`allowlist` silently degrades to public egress under `-e daytona`. This is a
+stale-pin problem, not a Harbor defect.
 
-Our tasks use `allowlist` for `[environment]` and `[agent]`, so a Daytona run
-has unrestricted egress with no warning. Treat Daytona results as obtained
-under a weaker network policy than the local run.
-
-- [ ] Choose one before the first Daytona run: accept public egress and record
-      it in the run manifest, or set those phases to `no-network` for Daytona
-      conditions and pre-bake dependencies into the snapshot.
-- [ ] Consider an upstream fix mapping `allowed_hosts` onto
-      `network_allow_list` in the Daytona adapter. It is a small, well-defined
-      change of the same shape as SEAGym#2, and it would make the two providers
-      behave alike rather than requiring per-provider task variants.
+- [ ] Bump `reference/seagym/reference/harbor` to v0.17.0 or later (upstream is
+      at v0.22.0) and re-verify all three vendor patches against the newer
+      tree. The Codex ATIF pricing patch is the one most likely to conflict,
+      since it touches agent internals.
+- [ ] Until the bump lands, treat Daytona results as obtained under weaker
+      network containment than the equivalent Docker run, and record that in
+      the run manifest.
+- [ ] Note that bumping Harbor may also move SEAGym's expectations of it;
+      re-run the deterministic smoke and the oracle canary after the bump
+      rather than assuming the interface is unchanged.
 
 **Snapshot invalidation is content-addressed, so a rebuilt image cannot go
 stale.** `snapshots.py:86-94` names auto snapshots
@@ -621,36 +628,39 @@ Snapshots found in `ERROR` state are deleted and recreated; an explicitly named
 and spends money, so the credential-free path remains the default; these
 examples are operator-invoked only.
 
-### D3. Inkling optimizer access is blocked upstream, not misconfigured
+### D3. Holo is the production optimizer; GPT-5.6 Luna is the proven alternative
 
-`thinkingmachines/inkling-small:free` and `thinkingmachines/inkling:free` both
-answer `403 "only available on agentic harnesses"`. Re-checked 2026-08-28 with
-a 360-second client timeout; the refusal returns in 0.0 to 27 seconds, so it is
-a policy decision and not queueing or congestion.
+Settled 2026-08-29. Accepted Holo as the sole production optimizer after three
+probes established that no free OpenRouter model can fill the role.
 
-Ruled out, each by measurement rather than inference:
+| Model | Outcome | Retryable |
+|---|---|---|
+| `z-ai/glm-5.2:free` | six retries exhausted on upstream saturation at both 20:37 and 00:20 | no |
+| `nvidia/nemotron-3-super-120b-a12b:free` | content failed schema validation, twice | no |
+| `dots-studio/dots-3-note-preview:free` | null content within the token budget | no |
+| `liquid/lfm-2.5-2.6b:free` | too small to satisfy the schema | no |
+| `thinkingmachines/inkling*:free` | no `response_format` at all, plus 403 | no |
 
-| Hypothesis | Evidence against |
-|---|---|
-| Wrong key type | The backend reads `OPENROUTER_API_KEY` only; asserted by a test that sets `OPENAI_API_KEY` to a different value and checks it is ignored |
-| Invalid or unfunded key | `GET /api/v1/key` returns valid, `is_free_tier: true` |
-| Account cannot complete requests | `liquid/lfm-2.5-2.6b:free` returned 200 on the same key seconds earlier |
-| Model not available to the account | Both Inkling ids appear in `GET /v1/models` for this key |
-| High traffic or a slow queue | A queue yields a timeout, a 429, or a slow 200 — never a 403 in 0.0s while another model succeeds |
-| Missing attribution headers | Retried with `HTTP-Referer` and `X-Title` set; unchanged |
+The quiet-hour hypothesis was tested and failed: GLM took 189s to exhaust its
+retries at 00:20 versus 138s at 20:37, so the endpoint was no less contended.
+Account quota was never the constraint (`usage: 0`, `limit: None`).
 
-The gate is on the *caller* being a registered app from
-<https://openrouter.ai/apps>, which a plain Python process is not. Waiting
-longer cannot satisfy it.
+All four proven-unusable models are now in `UNUSABLE_OPTIMIZER_MODELS` and
+rejected at configuration time with the specific reason, so nobody repeats
+these probes. `supported_parameters` proved unreliable as a signal: three of
+them advertise structured output and still cannot produce it.
 
-- [ ] No code change is needed. `OpenRouterBackend` already classifies this as
-      `OpenRouterAccessError` and fails closed rather than degrading.
-- [ ] To actually use Inkling, either run it through a registered harness, or
-      point `OPENROUTER_MODEL` at a non-gated model. The backend and
-      its CLI parameters are provider-agnostic and need no edit for the latter.
-- [ ] Keep `optimizer_backend: "holo_openai_compatible"` as the default until
-      one of those is done. A config selecting `inkling_openrouter` will fail
-      closed at the first proposal.
+- [x] Accept Holo as the production optimizer.
+- [x] Exclude the probed-unusable models at configuration time.
+- [x] Add `openai/gpt-5.6-luna` as the OpenRouter default. It is the first
+      model probed that returns a valid proposal on the first attempt: 43.5s,
+      426 tokens, `attempts=1`. Paid, at $0.20/M prompt and $1.20/M completion.
+      The Pro variant is deliberately not offered.
+- [ ] Leave the OpenRouter adapter wired and opt-in. It is protocol-conformant
+      with 21 unit tests; what it lacks is a working model, not code.
+- [ ] If a second optimizer is wanted later, it needs a paid model: OpenRouter's
+      paid tier, or `thinkingmachines/inkling`, whose paid variant supports
+      `response_format`. No code change is required for either.
 
 ### E. Stage the first paid run and then unlock the matrix
 

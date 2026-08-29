@@ -320,17 +320,58 @@ omitted here):
 
 `holo3-1-35b-a3b` is the only **Holo** model used by this integration, and
 `HoloBackendConfig` rejects other Holo IDs. It is not the only optimizer:
-`optimizer_backend` selects between `holo_openai_compatible` and
-`openrouter`, which are alternatives filling the same role behind the
-`ProposalBackend` protocol. Inkling's parameters and defaults are documented in
-[docs/openrouter-inkling.md](docs/openrouter-inkling.md); it is not reachable
-yet, and fails closed rather than degrading. Holo supports
-both reasoning and tool calls. For the skill-mutation request specifically,
-the optimizer uses strict `SkillUpdateProposal` JSON output followed by local
-semantic validation. This keeps mutation deterministic and auditable; it is
-not a workaround for another Holo model. Tool calling remains available to
-separate 35B workflows that need tools. Codex/GPT-5.6-sol continues to own the
-target coding-agent rollouts through Harbor.
+`optimizer_backend` selects between `holo_openai_compatible` and `openrouter`,
+which are alternatives filling the same role behind the `ProposalBackend`
+protocol. The OpenRouter adapter's parameters and model options are documented
+in [docs/openrouter-inkling.md](docs/openrouter-inkling.md); it is proven on
+`openai/gpt-5.6-luna` and rejects models that cannot satisfy the schema at
+configuration time. Holo supports both reasoning and tool calls. For the
+skill-mutation request specifically, the optimizer uses strict
+`SkillUpdateProposal` JSON output followed by local semantic validation. This
+keeps mutation deterministic and auditable; it is not a workaround for another
+Holo model. Tool calling remains available to separate 35B workflows that need
+tools. Codex/GPT-5.6-sol continues to own the target coding-agent rollouts
+through Harbor.
+
+### Credentials by run type
+
+What each run actually needs. The optimizer and target roles are billed
+separately and reported separately, so a gated run needs one credential per
+role rather than one shared key.
+
+| Run | Required credential | Provider |
+|---|---|---|
+| Codex static / target-only | `OPENAI_API_KEY` | OpenAI Platform |
+| Codex + SkillOpt gated canary | `OPENAI_API_KEY` + `HAI_API_KEY` | OpenAI + H Company |
+| Codex gate-off ablation | `OPENAI_API_KEY` + `HAI_API_KEY` | OpenAI + H Company |
+| Claude static — deferred | `ANTHROPIC_API_KEY` | Anthropic |
+| Claude + SkillOpt — deferred | `ANTHROPIC_API_KEY` + `HAI_API_KEY` | Anthropic + H Company |
+| Codex → Claude transfer evaluation | `ANTHROPIC_API_KEY` | Anthropic |
+| Claude → Codex transfer evaluation | `OPENAI_API_KEY` | OpenAI |
+| Docker oracle, CI, unit tests | none | — |
+| Future OpenAI Agents SDK adapter | `OPENAI_API_KEY` | OpenAI |
+
+Three things follow from the shape of this table.
+
+**Start at the bottom.** The Docker oracle, CI and unit tests need nothing, so
+every structural failure — image build, verifier, reward emission, edit policy
+— is reachable before a single token is spent. A task that fails under `-a
+oracle` would fail under a real agent too, and cost money to discover it.
+
+**A transfer evaluation needs only the target's credential**, not the
+optimizer's. It replays a frozen skill under a different harness and never
+calls the updater, so `HAI_API_KEY` is absent from both transfer rows by
+design; needing it would mean the run was not read-only.
+
+**`HAI_API_KEY` appears only where the gate runs.** It pays for optimizer
+proposals, while the executor key pays for target rollouts. `separate_costs()`
+keeps the two apart in reports and `CliCodeOptRolloutAgent` refuses to export
+optimizer-only variables into a target sandbox, so the split is enforced rather
+than merely documented.
+
+Selecting `optimizer_backend: "openrouter"` substitutes `OPENROUTER_API_KEY`
+for `HAI_API_KEY` in the optimizer role; every target-side requirement is
+unchanged.
 
 ### Strict proposal-schema policy options
 

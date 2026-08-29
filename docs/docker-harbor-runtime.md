@@ -192,39 +192,38 @@ Two operational consequences:
   simpler — but it will fail any task whose image needs `apt-get` or `pip` at
   build time, which includes all five packages here.
 
-### Allowlist enforcement differs by provider
+### Allowlist enforcement and the vendored Harbor pin
 
-Daytona is a fully supported Harbor environment, with its own Direct and
-Docker-in-Docker strategies and content-addressed snapshots. What differs is
-how `allowed_hosts` reaches the sandbox.
+Daytona enforces `allowed_hosts` from **Harbor v0.17.0 onward**. Support landed
+in [#2147](https://github.com/harbor-framework/harbor/pull/2147) (`60d4374d`,
+2026-07-02): `_network_kwargs()` emits `domain_allow_list` when hostnames are
+present and `network_allow_list` for CIDRs, clearing the opposing field when
+switching between them. Hostname allowlisting is therefore supported directly,
+not approximated by address ranges.
 
-The egress sidecar is wired only in `environments/docker/docker.py:359`, which
-appends `docker-compose-egress-control.yaml` to the compose stack. Nothing
-under `environments/daytona/` or in the shared `dind_compose.py` references
-egress or `allowed_hosts`.
+**This repository pins `f7110f1a` (2026-06-23, `v0.15.0-33`), which predates
+that fix by nine days.** Until the pin moves, on this checkout only:
 
-That is a gap in Harbor's adapter, not a limit of the platform. Daytona's own
-SDK exposes the control:
-
-```python
-CreateSandboxFromImageParams(network_block_all: bool | None,
-                             network_allow_list: str | None)
-```
-
-Harbor passes `network_block_all` and never passes `network_allow_list` —
-`grep -rn "network_allow_list" src/harbor/` returns nothing. So a task's
-`allowed_hosts` is not translated into the parameter Daytona would honour.
-
-| `network_mode` | `-e docker` | `-e daytona` |
+| `network_mode` | `-e docker` | `-e daytona` (at our pin) |
 |---|---|---|
-| `no-network` | blocked | blocked (`network_block_all=True`) |
-| `allowlist` | enforced by the sidecar | **degrades to public network** |
+| `no-network` | blocked | blocked |
+| `allowlist` | enforced by the sidecar | **degrades to public egress** |
 
-A task restricted to `api.openai.com` under Docker gets unrestricted egress
-under Daytona, with nothing in the log to say so. Until the adapter maps
-`allowed_hosts` onto `network_allow_list`, either accept public egress for
-Daytona runs and record it in the run manifest, or set those phases to
-`no-network` and pre-bake dependencies into the snapshot.
+The degradation is silent — same task config, both runs succeed, only
+containment differs — so a task validated locally under Docker would run
+remotely with weaker containment and nothing in the trial output would say so.
+
+Two ways to resolve, in order of preference:
+
+1. **Move the pin to v0.17.0 or later** (upstream is at v0.22.0). This is the
+   real fix and removes the divergence entirely. It is a submodule bump plus
+   re-verification of the three vendor patches against the newer tree.
+2. **Until then**, either accept public egress for Daytona runs and record it
+   in the run manifest, or set those phases to `no-network` and pre-bake
+   dependencies into the snapshot.
+
+The egress-control sidecar described above remains Docker-specific in every
+version; Daytona enforces policy through its own API rather than a sidecar.
 
 ### Daytona strategies: Direct and DinD
 
