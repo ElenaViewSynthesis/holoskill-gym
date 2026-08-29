@@ -1,0 +1,17 @@
+{
+  "split_id": "holoskill_algotune_canary_v1",
+  "split_version": "v1",
+  "seed": 42,
+  "splits": {
+    "train": [
+      "algotune-ode-stiff-vanderpol",
+      "algotune-capacitated-facility-location"
+    ],
+    "val": [
+      "algotune-cyclic-independent-set"
+    ],
+    "test": [
+      "algotune-battery-scheduling"
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "version": "holoskill-algotune-private-gate-v1",
+  "tasks": [
+    {
+      "task_id": "algotune-max-common-subgraph",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-max-common-subgraph"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-tensor-completion-3d",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-tensor-completion-3d"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization"
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    }
+  ]
+}

@@ -1,0 +1,246 @@
+#!/usr/bin/env python3
+"""Load a Harbor job directory into the run/metric/solution store.
+
+    scripts/ingest-run jobs/trusted-algotune-convolve2d-codex-paid
+    scripts/ingest-run jobs/<job> --dsn postgresql://... --dry-run
+
+`jobs/` is gitignored and Harbor rewrites it per run, so a paid run's evidence
+disappears when the directory is cleaned. This copies the durable facts out:
+what ran, what it scored, and the solver source that produced the score.
+
+Complexity annotations are NOT written here -- nothing can derive a bound from
+source automatically. Use `scripts/annotate-solution` after ingesting.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+DEFAULT_DSN = "postgresql://holoskill:holoskill_local_dev@localhost:5432/holoskill"
+
+_SOLVER_RE = re.compile(
+    r"--- Final Solver \(used for performance test\) ---\n(.*?)\n--- End Solver ---",
+    re.DOTALL,
+)
+_PERF_RE = {
+    "validity": re.compile(r"^Validity:\s*(\w+)", re.MULTILINE),
+    "baseline_time_s": re.compile(r"^Total Baseline Time:\s*([0-9.]+)s", re.MULTILINE),
+    "solver_time_s": re.compile(r"^Total Solver Time:\s*([0-9.]+)s", re.MULTILINE),
+    "raw_speedup": re.compile(r"^Raw Speedup:\s*([0-9.]+)\s*x", re.MULTILINE),
+}
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("job_dir", type=Path, help="Harbor job directory under jobs/.")
+    parser.add_argument("--dsn", default=os.environ.get("HOLOSKILL_DSN", DEFAULT_DSN))
+    parser.add_argument("--dataset", default="algotune@1.0")
+    parser.add_argument("--dataset-commit", default="479f07dd")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be written without connecting to the database.",
+    )
+    args = parser.parse_args(argv)
+
+    record = _read_job(args.job_dir)
+    if record is None:
+        print(f"no completed trial found under {args.job_dir}", file=sys.stderr)
+        return 1
+
+    if args.dry_run:
+        preview = {k: v for k, v in record.items() if k != "solver_source"}
+        preview["solver_source_bytes"] = len(record.get("solver_source") or "")
+        print(json.dumps(preview, indent=2, default=str))
+        return 0
+
+    try:
+        import psycopg
+    except ImportError:
+        print(
+            "psycopg is not installed. Either `uv pip install 'psycopg[binary]'` "
+            "or re-run with --dry-run to inspect the parsed record.",
+            file=sys.stderr,
+        )
+        return 2
+
+    with psycopg.connect(args.dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO tasks (task_id, dataset, dataset_commit, problem_size,
+                               declared_cpus, declared_memory, benchmark_trust)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (task_id) DO NOTHING
+            """,
+            (
+                record["task_id"],
+                args.dataset,
+                args.dataset_commit,
+                record.get("problem_size"),
+                record.get("declared_cpus"),
+                record.get("declared_memory"),
+                "external",
+            ),
+        )
+        cur.execute(
+            """
+            INSERT INTO runs (job_name, trial_name, task_id, agent, model,
+                              environment, paid, started_at, finished_at,
+                              input_tokens, output_tokens, cost_usd, exception_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (job_name, trial_name) DO UPDATE SET
+                finished_at = EXCLUDED.finished_at,
+                input_tokens = EXCLUDED.input_tokens,
+                output_tokens = EXCLUDED.output_tokens,
+                cost_usd = EXCLUDED.cost_usd
+            RETURNING run_id
+            """,
+            (
+                record["job_name"],
+                record["trial_name"],
+                record["task_id"],
+                record["agent"],
+                record.get("model"),
+                "docker",
+                record["agent"] != "oracle",
+                record.get("started_at"),
+                record.get("finished_at"),
+                record.get("input_tokens"),
+                record.get("output_tokens"),
+                record.get("cost_usd"),
+                record.get("exception_type"),
+            ),
+        )
+        run_id = cur.fetchone()[0]
+
+        for name, value, unit in record["metrics"]:
+            cur.execute(
+                """
+                INSERT INTO metrics (run_id, name, value, unit, valid)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (run_id, name) DO UPDATE SET value = EXCLUDED.value
+                """,
+                (run_id, name, value, unit, record.get("validity")),
+            )
+
+        if record.get("solver_source"):
+            source = record["solver_source"]
+            cur.execute(
+                """
+                INSERT INTO solutions (run_id, source, source_sha256)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (run_id) DO UPDATE SET
+                    source = EXCLUDED.source,
+                    source_sha256 = EXCLUDED.source_sha256
+                """,
+                (run_id, source, hashlib.sha256(source.encode("utf-8")).hexdigest()),
+            )
+        conn.commit()
+
+    print(f"ingested run_id={run_id} task={record['task_id']} agent={record['agent']}")
+    for name, value, _unit in record["metrics"]:
+        print(f"  {name:18} {value}")
+    return 0
+
+
+def _read_job(job_dir: Path) -> dict[str, Any] | None:
+    job_result = _load_json(job_dir / "result.json")
+    if job_result is None:
+        return None
+    trial_dirs = [d for d in sorted(job_dir.iterdir()) if d.is_dir()]
+    for trial in trial_dirs:
+        tr = _load_json(trial / "result.json")
+        if tr is None:
+            continue
+        stats = job_result.get("stats") or {}
+        task_path = ((tr.get("task_id") or {}).get("path")) or ""
+        task_name = tr.get("task_name") or Path(task_path).name
+        record: dict[str, Any] = {
+            "job_name": job_dir.name,
+            "trial_name": tr.get("trial_name") or trial.name,
+            "task_id": task_name,
+            "agent": _agent_of(job_result, tr),
+            "model": _model_of(tr),
+            "started_at": job_result.get("started_at"),
+            "finished_at": job_result.get("finished_at"),
+            "input_tokens": stats.get("n_input_tokens"),
+            "output_tokens": stats.get("n_output_tokens"),
+            "cost_usd": stats.get("cost_usd"),
+            "exception_type": (tr.get("exception_info") or {}).get("exception_type")
+            if isinstance(tr.get("exception_info"), dict)
+            else None,
+            "metrics": [],
+        }
+        reward = ((tr.get("verifier_result") or {}).get("rewards") or {}).get("reward")
+        if reward is not None:
+            record["metrics"].append(("reward", float(reward), None))
+
+        stdout = trial / "verifier" / "test-stdout.txt"
+        if stdout.is_file():
+            text = stdout.read_text(encoding="utf-8", errors="replace")
+            match = _SOLVER_RE.search(text)
+            if match:
+                record["solver_source"] = match.group(1)
+            for name, pattern in _PERF_RE.items():
+                found = pattern.search(text)
+                if not found:
+                    continue
+                if name == "validity":
+                    record["validity"] = found.group(1).strip().lower() == "true"
+                else:
+                    unit = "s" if name.endswith("_s") else None
+                    record["metrics"].append((name, float(found.group(1)), unit))
+
+        task_dir = ROOT / task_path
+        cfg = task_dir / "task.toml"
+        if cfg.is_file():
+            import tomllib
+
+            parsed = tomllib.loads(cfg.read_text(encoding="utf-8"))
+            record["problem_size"] = (parsed.get("metadata") or {}).get("algotune_problem_size")
+            env = parsed.get("environment") or {}
+            record["declared_cpus"] = env.get("cpus")
+            record["declared_memory"] = env.get("memory")
+        return record
+    return None
+
+
+def _agent_of(job_result: dict[str, Any], trial: dict[str, Any]) -> str:
+    info = trial.get("agent_info")
+    if isinstance(info, dict) and info.get("name"):
+        return str(info["name"])
+    for key in (job_result.get("stats") or {}).get("evals", {}):
+        return str(key).split("__")[0]
+    return "unknown"
+
+
+def _model_of(trial: dict[str, Any]) -> str | None:
+    info = trial.get("agent_info")
+    if isinstance(info, dict):
+        for key in ("model", "model_name"):
+            if info.get(key):
+                return str(info[key])
+    return None
+
+
+def _load_json(path: Path) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

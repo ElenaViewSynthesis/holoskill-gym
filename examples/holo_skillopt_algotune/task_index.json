@@ -1,0 +1,119 @@
+{
+  "version": "holoskill-algotune-v1",
+  "tasks": [
+    {
+      "task_id": "algotune-ode-stiff-vanderpol",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-ode-stiff-vanderpol"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 1
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-capacitated-facility-location",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-capacitated-facility-location"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 4
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-cyclic-independent-set",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-cyclic-independent-set"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 4
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-battery-scheduling",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-battery-scheduling"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 5
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-max-common-subgraph",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-max-common-subgraph"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 5
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    },
+    {
+      "task_id": "algotune-tensor-completion-3d",
+      "source": {
+        "type": "harbor",
+        "dataset_path": "../../results/trusted-tasks/algotune",
+        "task_name": "algotune-tensor-completion-3d"
+      },
+      "attributes": {
+        "domain": "code",
+        "task_type": "optimization",
+        "difficulty": "medium",
+        "problem_size": 5
+      },
+      "scoring": {
+        "main_reward_key": "reward",
+        "success_threshold": 1.0,
+        "score_transform": "binary_threshold"
+      }
+    }
+  ]
+}
