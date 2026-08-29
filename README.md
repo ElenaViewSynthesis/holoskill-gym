@@ -51,9 +51,17 @@ what is missing without writing anything.
 |---|---|---|---|
 | `seagym-redaction-usage-keys.patch` | `reference/seagym` | `redact_sensitive()` matches `TOKEN` as a substring, so token *counts* such as `total_tokens` were written to run records as `<redacted>` | [SEAGym#2](https://github.com/antropy-research/SEAGym/pull/2) |
 | `seagym-final-resume-idempotence.patch` | `reference/seagym` | Resuming an already-complete final checkpoint appended duplicate final evaluation rows and changed metrics | local pending upstream proposal |
+| `harbor-codex-atif-pricing-fallback.patch` | `reference/seagym/reference/harbor` | Codex could emit no ATIF cost fields when the pricing lookup had no entry for the configured model, losing target-side token accounting | local pending upstream proposal |
+
+Patches span two submodules at different depths, so `apply-vendor-patches`
+resolves each target path itself. It also checks that Harbor's egress sidecar
+scripts are LF: `entrypoint.sh` and `bin/network-policy` run inside a Linux
+container, and a CRLF checkout breaks the shebang before the task starts.
 
 Retire a patch by moving the submodule pin to a commit that already contains
-the fix, then deleting the file.
+the fix, then deleting the file. `reference/seagym/reference/harbor` is pinned
+at `v0.15.0-33`, which predates Daytona `allowed_hosts` support added in
+v0.17.0 — see [docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md).
 
 ## Python environment
 
