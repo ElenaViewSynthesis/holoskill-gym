@@ -5,7 +5,6 @@ from __future__ import annotations
 import difflib
 import hashlib
 import importlib
-import importlib.metadata
 import json
 import subprocess
 from collections.abc import Sequence
@@ -35,6 +34,7 @@ from .engine import (
 )
 from .holo_backend import HoloBackend, HoloBackendError
 from .leakage import LeakageGuard
+from .provenance import package_version
 from .schemas import GateDecision, GateTaskScore, OptimizerUsage, SkillUpdateProposal
 from .state import StateIntegrityError, StateStore, prompt_sha256, skill_sha256
 from .validation import ProposalPolicy, ProposalValidationError
@@ -589,10 +589,7 @@ def _load_gate_task_index(path: Path) -> TaskIndex | None:
 
 
 def _package_version(name: str) -> str:
-    try:
-        return importlib.metadata.version(name)
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"
+    return package_version(name) or "unknown"
 
 
 def _resolve_source_revisions(root: Path) -> dict[str, dict[str, str | bool | None]]:
