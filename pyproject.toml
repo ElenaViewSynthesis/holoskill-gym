@@ -26,6 +26,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    # Required when running the vendored Harbor async unit tests from this venv.
+    "pytest-asyncio>=1.2.0",
     "ruff>=0.6",
 ]
 

@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+# Initialize the required submodules and apply this repository's Harbor override.
+#
+# SEAGym records Harbor f7110f1a, which predates Daytona allowlist enforcement.
+# This repository deliberately overrides that nested pointer with v0.22.0. Pin
+# the immutable commit as well as the human-readable tag so a moved tag cannot
+# change the runtime. The same bootstrap is used by developers and CI.
+#
+# Usage: bash scripts/bootstrap-vendor [--check]
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+harbor_checkout="$repo_root/reference/seagym/reference/harbor"
+seagym_checkout="$repo_root/reference/seagym"
+skillopt_checkout="$repo_root/reference/skillopt"
+harbor_ref="v0.22.0"
+harbor_commit="4407eb5227a2ff4f0d3f16b2eb48849382fdf276"
+check_only=0
+[[ "${1:-}" == "--check" ]] && check_only=1
+
+if (( ! check_only )); then
+  if [[ ! -e "$seagym_checkout/.git" ]]; then
+    git -C "$repo_root" submodule update --init reference/seagym
+  fi
+  if [[ ! -e "$skillopt_checkout/.git" ]]; then
+    git -C "$repo_root" submodule update --init reference/skillopt
+  fi
+  if [[ ! -e "$harbor_checkout/.git" ]]; then
+    git -C "$seagym_checkout" submodule update --init reference/harbor
+  fi
+fi
+
+if [[ ! -e "$harbor_checkout/.git" ]]; then
+  echo "FAIL  Harbor is not initialized; run bash scripts/bootstrap-vendor" >&2
+  exit 1
+fi
+
+resolved_tag_commit="$(
+  git -C "$harbor_checkout" rev-parse "$harbor_ref^{commit}" 2>/dev/null || true
+)"
+if ! git -C "$harbor_checkout" cat-file -e "$harbor_commit^{commit}" 2>/dev/null \
+    || [[ "$resolved_tag_commit" != "$harbor_commit" ]]; then
+  if (( check_only )); then
+    echo "FAIL  required Harbor ref is unavailable: $harbor_ref ($harbor_commit)" >&2
+    exit 1
+  fi
+  git -C "$harbor_checkout" fetch --tags --depth 1 origin "$harbor_ref"
+fi
+
+if [[ "$(git -C "$harbor_checkout" rev-parse HEAD)" != "$harbor_commit" ]]; then
+  if (( check_only )); then
+    echo "FAIL  Harbor is not pinned to $harbor_ref ($harbor_commit)" >&2
+    exit 1
+  fi
+  git -C "$harbor_checkout" checkout --quiet --detach "$harbor_commit"
+fi
+
+actual_commit="$(git -C "$harbor_checkout" rev-parse HEAD)"
+actual_tag="$(git -C "$harbor_checkout" describe --tags --exact-match 2>/dev/null || true)"
+if [[ "$actual_commit" != "$harbor_commit" || "$actual_tag" != "$harbor_ref" ]]; then
+  echo "FAIL  Harbor override verification failed" >&2
+  echo "      expected $harbor_ref ($harbor_commit)" >&2
+  echo "      resolved ${actual_tag:-untagged} ($actual_commit)" >&2
+  exit 1
+fi
+
+echo "OK    Harbor pinned to $harbor_ref ($harbor_commit)"

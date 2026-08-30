@@ -8,13 +8,6 @@ on:
 permissions:
   contents: read
 
-# SEAGym still records Harbor at f7110f1a (v0.15.0 + 33). We override that pin
-# here so CI builds the same Harbor the working tree does; without this the
-# submodule init below resets to the stale pin and the vendor patch will not
-# apply. Keep in sync with the tree: git -C reference/seagym/reference/harbor describe --tags
-env:
-  HARBOR_REF: v0.22.0
-
 jobs:
   unit:
     runs-on: ubuntu-latest
@@ -24,12 +17,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize required vendored dependencies
-        run: |
-          git submodule update --init reference/seagym reference/skillopt
-          git -C reference/seagym submodule update --init reference/harbor
-          git -C reference/seagym/reference/harbor fetch --tags --depth 1 origin "$HARBOR_REF"
-          git -C reference/seagym/reference/harbor checkout --quiet "$HARBOR_REF"
-          git -C reference/seagym/reference/harbor describe --tags
+        run: bash scripts/bootstrap-vendor
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -41,6 +29,7 @@ jobs:
         run: uv sync --frozen --extra dev
       - name: Apply and verify vendor patches
         run: |
+          bash scripts/bootstrap-vendor --check
           bash scripts/apply-vendor-patches
           bash scripts/apply-vendor-patches --check
       - name: Verify generated files and lock
@@ -77,12 +66,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize required vendored dependencies
-        run: |
-          git submodule update --init reference/seagym reference/skillopt
-          git -C reference/seagym submodule update --init reference/harbor
-          git -C reference/seagym/reference/harbor fetch --tags --depth 1 origin "$HARBOR_REF"
-          git -C reference/seagym/reference/harbor checkout --quiet "$HARBOR_REF"
-          git -C reference/seagym/reference/harbor describe --tags
+        run: bash scripts/bootstrap-vendor
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -90,7 +74,9 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --frozen --extra dev
       - name: Prepare patched Harbor
-        run: bash scripts/apply-vendor-patches
+        run: |
+          bash scripts/bootstrap-vendor --check
+          bash scripts/apply-vendor-patches
       - name: Run credential-free oracle
         run: uv run harbor run -p "${{ matrix.task }}" -a oracle -y
       - name: Sanitize failure logs

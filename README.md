@@ -82,21 +82,25 @@ upstream snippet.
 | `reference/skillopt` | [microsoft/SkillOpt](https://github.com/microsoft/SkillOpt) | `v0.2.0` (`e4ea6a6`) |
 
 ```bash
-git submodule update --init --recursive
+bash scripts/bootstrap-vendor
 bash scripts/apply-vendor-patches
 ```
 
+Do not replace the bootstrap with `git submodule update --init --recursive`.
+SEAGym records nested Harbor `f7110f1a`, which predates Daytona allowlist
+enforcement. The tracked bootstrap initializes only the required submodules and
+then checks out immutable Harbor commit `4407eb52` (`v0.22.0`), matching CI.
 The nested `reference/ace/kayba-ai/ace-eval` submodule is private or removed
-upstream. Its initialization failure is expected and does not affect this
-SkillOpt/Holo integration.
+upstream and is intentionally not initialized.
 
 ### Vendor patches
 
 A submodule records a commit SHA, not file contents, so an edit inside
 `reference/` cannot be committed here and would be lost on a fresh clone.
 Patches live in `patches/` and are re-applied after every `git submodule
-update`. `scripts/apply-vendor-patches` is idempotent, and `--check` reports
-what is missing without writing anything.
+update`. Run `scripts/bootstrap-vendor` first to restore the Harbor override.
+`scripts/apply-vendor-patches` is idempotent, and `--check` reports what is
+missing without writing anything.
 
 | Patch | Target | Why | Upstream |
 |---|---|---|---|
@@ -109,10 +113,12 @@ resolves each target path itself. It also checks that Harbor's egress sidecar
 scripts are LF: `entrypoint.sh` and `bin/network-policy` run inside a Linux
 container, and a CRLF checkout breaks the shebang before the task starts.
 
-Retire a patch by moving the submodule pin to a commit that already contains
-the fix, then deleting the file. `reference/seagym/reference/harbor` is pinned
-at `v0.15.0-33`, which predates Daytona `allowed_hosts` support added in
-v0.17.0 — see [docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md).
+Retire a patch by moving the corresponding pin to a commit that already
+contains the fix, then deleting the file. SEAGym still records Harbor
+`v0.15.0-33`; this repository reproducibly overrides it with `v0.22.0` through
+`scripts/bootstrap-vendor` because Daytona `allowed_hosts` support requires
+v0.17.0 or later. See
+[docs/docker-harbor-runtime.md](docs/docker-harbor-runtime.md).
 
 ## Python environment
 
@@ -170,13 +176,25 @@ validates Docker and credential presence without calling a model:
 python -m holoskill_gym.preflight --check-only --condition codex-gated --json
 ```
 
-A ready environment reports **Docker reachable** and Harbor, SEAGym and SkillOpt
-**resolving from the pinned checkout** rather than from unrelated global
-installs:
+For Daytona, select it explicitly. This validates the SDK dependency, either
+supported authentication form, `DAYTONA_API_URL`, the vendored Harbor
+allowlist-fix ancestry, and one read-only control-plane request. It does not
+create a sandbox:
+
+```bash
+python -m holoskill_gym.preflight --check-only \
+  --condition codex-static --environment daytona --json
+```
+
+A ready Docker environment reports **Docker reachable**; every environment
+requires Harbor, SEAGym, and SkillOpt to resolve from this checkout rather than
+unrelated global installs. Daytona additionally requires its directly installed
+SDK and the provider checks above:
 
 | Component | Required | Currently verified |
 |---|---|---|
 | Docker Engine | daemon reachable over the socket | **29.5.2**, `status: ready` |
+| Daytona SDK | direct dependency when `--environment daytona` is selected | **0.207.0** |
 | Harbor | the revision this repo pins, not a global build | **0.22.0** |
 | SEAGym | vendored submodule, editable | **0.1.0** |
 | SkillOpt | `v0.2.0` exactly (`skillopt==0.2.0` in `pyproject.toml`) | **0.2.0** |
@@ -804,15 +822,19 @@ straight to the failing step instead of paging through a passing job's output.
 ```bash
 bash scripts/apply-vendor-patches          # re-apply vendor patches
 bash scripts/apply-vendor-patches --check  # report without writing; exits 1 if missing
+bash scripts/bootstrap-vendor --check      # verify the Harbor override
 python -m pytest -q                        # project test suite
 python -m ruff check holoskill_gym tests
 python -m ruff format --check holoskill_gym tests
 python -m holoskill_gym.preflight --check-only --condition codex-static
+python -m holoskill_gym.preflight --check-only --condition codex-static --environment daytona
 python -m holoskill_gym.preflight --optimizer --structured   # spends HAI_API_KEY
 scripts/scan-artifacts results/ jobs/
 ```
 
-`--check-only` never calls a model and reports only credential presence.
+`--check-only` never calls a model or creates a sandbox. Daytona mode makes one
+read-only control-plane request so an invalid SDK endpoint or credential fails
+before sandbox creation; secret values are never reported.
 `--optimizer --structured` sends one structured request and spends optimizer
 tokens.
 

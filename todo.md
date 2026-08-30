@@ -309,14 +309,16 @@ role-separated cost report.
 
 ### A. Install and pin the Harbor CLI in the project environment
 
-- [ ] Initialize the Harbor checkout at the revision pinned through SEAGym and
-      record both the SEAGym and nested Harbor SHAs in the production run
-      manifest. Do not install an unrelated global Harbor build: SEAGym and the
-      `harbor` command must use the same checked-in API version.
+- [x] Initialize required submodules through `scripts/bootstrap-vendor`, which
+      reproducibly overrides SEAGym's stale nested Harbor pointer with immutable
+      commit `4407eb52` (`v0.22.0`). Record both SEAGym and Harbor SHAs in the
+      production run manifest. Do not install an unrelated global Harbor build:
+      SEAGym and the `harbor` command must use the bootstrapped checkout.
 - [ ] Install Harbor into `.venv-linux` alongside this project, SkillOpt, and
       SEAGym, using the editable source already declared by `pyproject.toml`:
 
       ```bash
+      bash scripts/bootstrap-vendor
       uv venv --python 3.12 .venv-linux
       UV_CACHE_DIR=/tmp/cua-holo-uv-cache uv pip install \
         -e '.[dev]' \
@@ -332,6 +334,7 @@ role-separated cost report.
       .venv-linux/bin/harbor --help
       .venv-linux/bin/python -c "import harbor; print(harbor.__file__)"
       .venv-linux/bin/seagym inspect env
+      bash scripts/bootstrap-vendor --check
       bash scripts/apply-vendor-patches --check
       ```
 
@@ -588,7 +591,8 @@ is a direct dependency in `pyproject.toml`. Installed version 0.207.0;
       `backend.n_concurrent`, which governs SEAGym runs rather than direct
       `harbor run` invocations.
 
-**Daytona allowlist support requires Harbor v0.17.0+; our pin is older.**
+**Daytona allowlist support requires Harbor v0.17.0+; resolved by the v0.22.0
+vendor bump.**
 
 Corrected 2026-08-29 after maintainer feedback on
 [harbor#2979](https://github.com/harbor-framework/harbor/issues/2979). Daytona
@@ -597,9 +601,12 @@ network policy support landed in
 2026-07-02) and shipped in v0.17.0, handling both `domain_allow_list` for
 hostnames and `network_allow_list` for CIDRs.
 
-Our pin `f7110f1a` is dated 2026-06-23 and predates it, so on this checkout
-`allowlist` silently degrades to public egress under `-e daytona`. This is a
-stale-pin problem, not a Harbor defect.
+The inherited pin `f7110f1a` dated 2026-06-23 predates it, so it silently
+degraded `allowlist` to public egress under `-e daytona`. Daytona was therefore
+left unused instead of quietly selected with a containment guarantee the
+runtime could not honor. The vendored checkout is now `v0.22.0` (`4407eb52`),
+and preflight verifies the fix commit is in its ancestry before enabling the
+provider.
 
 **The pin is inherited, not chosen.** Harbor is a dependency *of* SEAGym, not
 of this project:
@@ -625,23 +632,17 @@ SEAGym calls directly for environments, agents, trial execution and ATIF
 production. A breakage would surface as SEAGym failing against Harbor, not as
 anything wrong in this repository, and would be ours to diagnose.
 
-Ranked by preference:
+Resolution and compatibility obligations:
 
-- [ ] **Ask SEAGym to bump instead.** The clean fix is upstream: SEAGym raising
-      its own Harbor pointer, tested by the people who own the integration.
-      Worth an issue on antropy-research/SEAGym before doing it ourselves.
-- [ ] **If we override anyway**, bump to v0.17.0 rather than v0.22.0 — the
-      earliest release containing the Daytona fix, minimising the API surface
-      that moves. Re-verify all three vendor patches against the newer tree;
-      `harbor-codex-atif-pricing-fallback.patch` is the likeliest to conflict
-      since it touches agent internals.
-- [ ] Treat the override as a SEAGym-compatibility change, not a Harbor
+- [x] Override the inherited Harbor pointer with v0.22.0, which contains the
+      upstream Daytona allowlist fix.
+- [ ] Treat the override as a SEAGym-compatibility change, not merely a Harbor
       upgrade: re-run the deterministic smoke, the oracle canary on all five
       packages, and the full suite. Record the Harbor SHA in the run manifest
       so a later regression can be attributed.
-- [ ] Until any bump lands, treat Daytona results as obtained under weaker
-      network containment than the equivalent Docker run, and record that in
-      the run manifest.
+- [x] Fail Daytona preflight closed when the fix ancestry, SDK endpoint,
+      credentials, dependency, or read-only control-plane probe cannot be
+      verified.
 
 **Snapshot invalidation is content-addressed, so a rebuilt image cannot go
 stale.** `snapshots.py:86-94` names auto snapshots

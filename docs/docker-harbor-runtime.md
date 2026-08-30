@@ -201,26 +201,20 @@ present and `network_allow_list` for CIDRs, clearing the opposing field when
 switching between them. Hostname allowlisting is therefore supported directly,
 not approximated by address ranges.
 
-**This repository pins `f7110f1a` (2026-06-23, `v0.15.0-33`), which predates
-that fix by nine days.** Until the pin moves, on this checkout only:
+**This repository now pins Harbor `v0.22.0` (`4407eb52`), which contains that
+fix.** The runtime preflight verifies commit `60d4374d` is an ancestor of the
+vendored checkout before declaring Daytona ready. The relevant behavior is:
 
-| `network_mode` | `-e docker` | `-e daytona` (at our pin) |
+| `network_mode` | `-e docker` | `-e daytona` (Direct) |
 |---|---|---|
 | `no-network` | blocked | blocked |
-| `allowlist` | enforced by the sidecar | **degrades to public egress** |
+| `allowlist` | enforced by the sidecar | enforced by Daytona's API |
 
-The degradation is silent — same task config, both runs succeed, only
-containment differs — so a task validated locally under Docker would run
-remotely with weaker containment and nothing in the trial output would say so.
-
-Two ways to resolve, in order of preference:
-
-1. **Move the pin to v0.17.0 or later** (upstream is at v0.22.0). This is the
-   real fix and removes the divergence entirely. It is a submodule bump plus
-   re-verification of the three vendor patches against the newer tree.
-2. **Until then**, either accept public egress for Daytona runs and record it
-   in the run manifest, or set those phases to `no-network` and pre-bake
-   dependencies into the snapshot.
+The prior `f7110f1a` pin silently degraded Daytona allowlists to public egress.
+Daytona was intentionally left unused until the upstream fix was vendored: a
+configuration claiming containment that its runtime cannot enforce is not an
+acceptable cloud fallback. Changing the provider in experiment configs would
+have hidden the gap rather than fixed it.
 
 The egress-control sidecar described above remains Docker-specific in every
 version; Daytona enforces policy through its own API rather than a sidecar.
@@ -262,10 +256,11 @@ Two operational details from `environments/daytona/environment.py`:
   by Daytona, then waits up to `_DOCKER_DAEMON_TIMEOUT_SEC = 60` for the daemon
   to accept connections. A DinD trial that fails in the first minute is usually
   this, not the task.
-- The DinD sandbox is created with `network_block_all=False` regardless of task
-  policy, because the daemon needs network to pull images. Combined with the
-  allowlist gap above, a DinD task on Daytona has the weakest containment of
-  any path documented here.
+- The DinD sandbox is created with `network_block_all=False` because the daemon
+  needs network to pull images. Daytona DinD does not advertise allowlist
+  support; current Harbor rejects an allowlist policy for that strategy instead
+  of silently promising Direct-mode containment. The five packages here are
+  single-container Direct tasks, so they use Daytona's enforced API allowlist.
 
 ## Running a task
 
@@ -274,7 +269,9 @@ and SEAGym use the same pinned API version:
 
 ```bash
 wsl -e bash -lc "cd /mnt/c/Users/proxi/Documents/codex-6/cua-holo && .venv-linux/bin/harbor --version"
-# 0.15.0
+# Distribution metadata may be stale for this editable install; use:
+git -C reference/seagym/reference/harbor describe --tags
+# v0.22.0
 ```
 
 Build and run the first repaired task through Docker Desktop with the reference

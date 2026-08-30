@@ -4,7 +4,7 @@
 # Submodules record a commit SHA, not file contents, so a local edit inside
 # reference/ cannot be committed by this repository and would be lost on a
 # fresh clone. Patches live here instead and are re-applied after
-# `git submodule update`.
+# `scripts/bootstrap-vendor` restores the required revisions.
 #
 # Idempotent: an already-applied patch is detected and skipped, so running
 # this twice is safe.
@@ -15,6 +15,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 check_only=0
 [[ "${1:-}" == "--check" ]] && check_only=1
+
+if (( check_only )); then
+  bash "$repo_root/scripts/bootstrap-vendor" --check
+else
+  bash "$repo_root/scripts/bootstrap-vendor"
+fi
 
 # Vendored checkouts do not pin line endings, so a LF patch must still
 # match a CRLF working tree on Windows.
@@ -27,7 +33,7 @@ apply_patch() {
   local patch_path="$repo_root/patches/$patch"
 
   if [[ ! -d "$target" ]]; then
-    echo "SKIP  $submodule is not initialized; run git submodule update --init --recursive" >&2
+    echo "SKIP  $submodule is not initialized; run bash scripts/bootstrap-vendor" >&2
     status=1
     return
   fi
@@ -57,6 +63,7 @@ apply_patch() {
 apply_patch reference/seagym seagym-redaction-usage-keys.patch
 apply_patch reference/seagym seagym-final-resume-idempotence.patch
 apply_patch reference/seagym seagym-intermediate-resume-validation-state.patch
+apply_patch reference/seagym seagym-checkpoint-manifest-redaction.patch
 apply_patch reference/seagym/reference/harbor harbor-codex-atif-pricing-fallback.patch
 
 # Docker copies executable scripts byte-for-byte. On Windows-backed clones,

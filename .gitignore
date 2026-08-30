@@ -23,3 +23,5 @@ resume-bullets.md
 
 run-algotune-gated.sh
 .github-issue-body.md
+.verify.sh
+.tmp*.sh
