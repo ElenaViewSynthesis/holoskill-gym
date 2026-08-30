@@ -1,0 +1,32 @@
+diff --git a/seagym/trainers/checkpoint.py b/seagym/trainers/checkpoint.py
+index 66d26c8..990c3ea 100644
+--- a/seagym/trainers/checkpoint.py
++++ b/seagym/trainers/checkpoint.py
+@@ -7,6 +7,8 @@ import json
+ from pathlib import Path
+ from typing import Any
+ 
++from seagym.logging.redaction import redact_sensitive
++
+ 
+ @dataclass(frozen=True)
+ class TrainerState:
+@@ -67,7 +69,7 @@ def write_checkpoint_manifest(
+     baseline_manifest: dict[str, Any] | None = None,
+ ) -> dict[str, Any]:
+     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+-    manifest = {
++    raw_manifest = {
+         "checkpoint_id": checkpoint_id,
+         "checkpoint_type": checkpoint_type,
+         "created_at": datetime.now(timezone.utc).isoformat(),
+@@ -80,7 +82,8 @@ def write_checkpoint_manifest(
+         "refs": refs or {},
+     }
+     if baseline_manifest is not None:
+-        manifest["baseline"] = baseline_manifest
++        raw_manifest["baseline"] = baseline_manifest
++    manifest = redact_sensitive(raw_manifest)
+     (checkpoint_dir / "checkpoint.json").write_text(
+         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+         encoding="utf-8",

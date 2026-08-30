@@ -29,5 +29,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"secret-shaped artifact: {root / relative}")
             failed = True
     return int(failed)
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
