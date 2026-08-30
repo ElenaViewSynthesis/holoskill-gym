@@ -21,7 +21,7 @@ mutates a user-global Codex or Claude Code installation.
 From the repository root:
 
 ```bash
-git submodule update --init --recursive
+bash scripts/bootstrap-vendor
 bash scripts/apply-vendor-patches
 source .venv-linux/bin/activate
 pytest -q
@@ -61,6 +61,11 @@ Use the non-spending condition preflight first:
 ```bash
 python -m holoskill_gym.preflight --check-only --condition codex-static --json
 ```
+
+Use `--environment daytona` when staging Harbor on Daytona. That mode checks
+the direct Daytona SDK dependency, composite API-key/JWT authentication,
+`DAYTONA_API_URL`, Harbor's allowlist-fix ancestry, and control-plane
+connectivity without creating a sandbox.
 
 ## Task and split contract
 

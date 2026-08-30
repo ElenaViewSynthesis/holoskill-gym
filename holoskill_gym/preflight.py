@@ -13,7 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import importlib.metadata
+import asyncio
 import json
 import os
 import shutil
@@ -21,14 +21,18 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
-from .configuration import credential_status, load_project_environment
+from .configuration import credential_status, load_project_environment, project_root
+from .provenance import package_version
 
 DEFAULT_BASE_URL = "https://api.hcompany.ai/v1/"
 DEFAULT_MODEL = "holo3-1-35b-a3b"
 DEFAULT_OPTIMIZER_MODEL = "holo3-1-35b-a3b"
+DEFAULT_DAYTONA_API_URL = "https://app.daytona.io/api"
+DAYTONA_ALLOWLIST_FIX = "60d4374d38c669162d18eb6deb0c6a982469f3c2"
 PROMPT = "In one sentence, what is a computer-use agent?"
 
 
@@ -65,13 +69,25 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check-only",
         action="store_true",
-        help="Validate Docker, Harbor, and condition-specific credentials without an API call.",
+        help=(
+            "Validate Harbor runtime readiness without a model call or sandbox creation. "
+            "Daytona mode makes one read-only control-plane request."
+        ),
     )
     parser.add_argument(
         "--condition",
         choices=("codex-static", "codex-gated", "claude-static", "claude-gated"),
         default="codex-static",
         help="Credential condition to validate with --check-only.",
+    )
+    parser.add_argument(
+        "--environment",
+        choices=("docker", "daytona"),
+        default="docker",
+        help=(
+            "Harbor environment to validate with --check-only. Daytona performs one "
+            "read-only control-plane request and does not create a sandbox."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -269,6 +285,7 @@ def _runtime_preflight(args: argparse.Namespace) -> int:
     """Perform a non-spending readiness check and never serialize secret values."""
 
     env_path = load_project_environment(args.env_file)
+    environment = getattr(args, "environment", "docker")
     credential_variables = ["OPENAI_API_KEY"]
     if args.condition.startswith("claude-"):
         credential_variables = ["ANTHROPIC_API_KEY"]
@@ -276,22 +293,41 @@ def _runtime_preflight(args: argparse.Namespace) -> int:
         credential_variables.append("HAI_API_KEY")
 
     credentials = {variable: credential_status(variable) for variable in credential_variables}
-    docker = _docker_status()
-    packages = {name: _installed_version(name) for name in ("harbor", "seagym", "skillopt")}
+    packages_to_check = ["harbor", "seagym", "skillopt"]
+    if environment == "daytona":
+        packages_to_check.append("daytona")
+        credentials.update(_daytona_credential_statuses())
+    packages = {name: _installed_version(name) for name in packages_to_check}
+    docker = (
+        _docker_status()
+        if environment == "docker"
+        else {"status": "not-required", "server_version": None}
+    )
+    daytona = _daytona_status(credentials) if environment == "daytona" else None
     failures = [
-        f"credential:{variable}" for variable, status in credentials.items() if status != "present"
+        f"credential:{variable}"
+        for variable, status in credentials.items()
+        if variable not in _DAYTONA_CREDENTIALS and status != "present"
     ]
-    if docker["status"] != "ready":
+    if environment == "docker" and docker["status"] != "ready":
         failures.append("docker")
+    if environment == "daytona":
+        daytona_auth_ready = _daytona_auth_ready(credentials)
+        if not daytona_auth_ready:
+            failures.append("credential:daytona")
+        elif daytona is None or daytona["status"] != "ready":
+            failures.append("daytona")
     if any(version is None for version in packages.values()):
         failures.append("packages")
     manifest = {
         "schema_version": "holoskill-runtime-preflight-v1",
         "condition": args.condition,
+        "environment": environment,
         "ready": not failures,
         "env_file": str(env_path),
         "credentials": credentials,
         "docker": docker,
+        "daytona": daytona,
         "packages": packages,
         "failures": failures,
     }
@@ -299,11 +335,16 @@ def _runtime_preflight(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, indent=2, sort_keys=True))
     else:
         print(f"HoloSkill runtime preflight: {args.condition}")
+        print(f"  environment : {environment}")
         print(f"  ready       : {str(manifest['ready']).lower()}")
         print(f"  env_file    : {env_path}")
         for variable, status in credentials.items():
             print(f"  {variable:<12}: {status} (value intentionally not displayed)")
         print(f"  docker      : {docker['status']}")
+        if daytona is not None:
+            print(f"  daytona     : {daytona['status']}")
+            print(f"  api_url     : {daytona['api_url_status']}")
+            print(f"  allowlist   : {daytona['allowlist_status']}")
         for name, version in packages.items():
             print(f"  {name:<12}: {version or 'missing'}")
     return 0 if manifest["ready"] else 12
@@ -330,11 +371,127 @@ def _docker_status() -> dict[str, str | None]:
     }
 
 
-def _installed_version(distribution: str) -> str | None:
+_DAYTONA_CREDENTIALS = frozenset(
+    {"DAYTONA_API_KEY", "DAYTONA_JWT_TOKEN", "DAYTONA_ORGANIZATION_ID"}
+)
+
+
+def _daytona_credential_statuses() -> dict[str, str]:
+    return {variable: credential_status(variable) for variable in sorted(_DAYTONA_CREDENTIALS)}
+
+
+def _daytona_auth_ready(credentials: dict[str, str]) -> bool:
+    return credentials.get("DAYTONA_API_KEY") == "present" or (
+        credentials.get("DAYTONA_JWT_TOKEN") == "present"
+        and credentials.get("DAYTONA_ORGANIZATION_ID") == "present"
+    )
+
+
+def _daytona_status(credentials: dict[str, str]) -> dict[str, str | None]:
+    api_url = (os.environ.get("DAYTONA_API_URL") or DEFAULT_DAYTONA_API_URL).strip()
+    api_url_status = _daytona_api_url_status(api_url)
+    allowlist_supported = _harbor_has_daytona_allowlist_fix()
+    if api_url_status != "valid":
+        status = "invalid-api-url"
+        connectivity = "not-checked"
+    elif not _daytona_auth_ready(credentials):
+        status = "missing-credentials"
+        connectivity = "not-checked"
+    elif allowlist_supported is not True:
+        status = "containment-unsupported"
+        connectivity = "not-checked"
+    else:
+        connectivity = _daytona_control_plane_status()
+        status = "ready" if connectivity == "ready" else "unreachable"
+    return {
+        "status": status,
+        "api_url_status": api_url_status,
+        "api_url_source": "environment" if os.environ.get("DAYTONA_API_URL") else "sdk-default",
+        "connectivity": connectivity,
+        "allowlist_status": (
+            "supported"
+            if allowlist_supported is True
+            else "unsupported"
+            if allowlist_supported is False
+            else "unknown"
+        ),
+        "allowlist_fix": DAYTONA_ALLOWLIST_FIX,
+    }
+
+
+def _daytona_api_url_status(api_url: str) -> str:
     try:
-        return importlib.metadata.version(distribution)
-    except importlib.metadata.PackageNotFoundError:
+        parsed = urlsplit(api_url)
+        port = parsed.port
+    except ValueError:
+        return "invalid"
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(character.isspace() for character in api_url)
+        or (port is not None and not (1 <= port <= 65535))
+    ):
+        return "invalid"
+    return "valid"
+
+
+def _harbor_has_daytona_allowlist_fix() -> bool | None:
+    checkout = project_root() / "reference/seagym/reference/harbor"
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "merge-base",
+                "--is-ancestor",
+                DAYTONA_ALLOWLIST_FIX,
+                "HEAD",
+            ],
+            check=False,
+            capture_output=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    return None
+
+
+def _daytona_control_plane_status() -> str:
+    try:
+        from daytona.common.errors import DaytonaError
+    except ImportError:
+        return "dependency-missing"
+    try:
+        return asyncio.run(_probe_daytona_control_plane())
+    except (DaytonaError, OSError, TimeoutError):
+        return "unreachable"
+
+
+async def _probe_daytona_control_plane() -> str:
+    """Issue one bounded list request without creating or modifying a sandbox."""
+
+    from daytona import AsyncDaytona, ListSandboxesQuery
+
+    client = AsyncDaytona()
+    try:
+        sandboxes = client.list(ListSandboxesQuery(limit=1), request_timeout=10)
+        await anext(sandboxes, None)
+    finally:
+        await client.close()
+    return "ready"
+
+
+def _installed_version(distribution: str) -> str | None:
+    return package_version(distribution)
 
 
 if __name__ == "__main__":

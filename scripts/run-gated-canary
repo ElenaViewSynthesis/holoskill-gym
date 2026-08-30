@@ -53,17 +53,31 @@ export PATH="$REPO_ROOT/$VENV/bin:$PATH"
 export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
 
 command -v harbor >/dev/null || { echo "harbor still not on PATH" >&2; exit 69; }
-echo "harbor : $(command -v harbor) $(harbor --version 2>/dev/null || echo '?')"
+HARBOR_SOURCE_VERSION="$(git -C reference/seagym/reference/harbor describe --tags 2>/dev/null || echo '?')"
+echo "harbor : $(command -v harbor) $HARBOR_SOURCE_VERSION"
 echo "config : $CONFIG"
 
-if [ "$SKIP_PULL" -eq 0 ]; then
+HARBOR_ENV="$($VENV/bin/python -c \
+    'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["backend"]["env"])' \
+    "$CONFIG")"
+case "$HARBOR_ENV" in
+    docker|daytona) ;;
+    *) echo "unsupported Harbor environment in config: $HARBOR_ENV" >&2; exit 64 ;;
+esac
+echo "env    : $HARBOR_ENV"
+
+if [ "$HARBOR_ENV" = "docker" ] && [ "$SKIP_PULL" -eq 0 ]; then
     echo "pulling base images so a mid-run pull cannot strand a paid rollout..."
     docker pull --quiet python:3.12-slim
 fi
 
-# Credentials are checked without spending anything; --check-only never calls a
-# model. Failing here costs nothing, whereas failing later costs a rollout.
-python -m holoskill_gym.preflight --check-only --condition codex-gated >/dev/null || {
+# Runtime and credentials are checked without spending tokens or creating a
+# sandbox. Daytona performs one read-only control-plane request so endpoint and
+# authentication failures surface before the paid rollout.
+python -m holoskill_gym.preflight \
+    --check-only \
+    --condition codex-gated \
+    --environment "$HARBOR_ENV" >/dev/null || {
     echo "preflight failed -- run it directly to see which check" >&2
     exit 70
 }
