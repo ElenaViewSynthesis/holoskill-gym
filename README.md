@@ -161,6 +161,48 @@ production benchmark. Trusted production repositories remain external.
 Every command below is run from the repository root. Substitute your own config
 path for the deterministic example.
 
+### Version requirements
+
+The runtime preflight is the authoritative check, and it spends nothing — it
+validates Docker and credential presence without calling a model:
+
+```bash
+python -m holoskill_gym.preflight --check-only --condition codex-gated --json
+```
+
+A ready environment reports **Docker reachable** and Harbor, SEAGym and SkillOpt
+**resolving from the pinned checkout** rather than from unrelated global
+installs:
+
+| Component | Required | Currently verified |
+|---|---|---|
+| Docker Engine | daemon reachable over the socket | **29.5.2**, `status: ready` |
+| Harbor | the revision this repo pins, not a global build | **0.22.0** |
+| SEAGym | vendored submodule, editable | **0.1.0** |
+| SkillOpt | `v0.2.0` exactly (`skillopt==0.2.0` in `pyproject.toml`) | **0.2.0** |
+| Python | `>=3.12` | 3.12 in CI |
+
+`ready: true` with an empty `failures` list is the gate to clear before a paid
+run. Confirm the import path too — it must point inside this checkout:
+
+```bash
+python -c "import harbor; print(harbor.__file__)"   # .../reference/seagym/reference/harbor/...
+```
+
+**Editable installs report stale versions.** Harbor is installed editable, so
+after a submodule bump the code executed is the new checkout while
+`importlib.metadata.version("harbor")` still reports whatever was resolved at
+install time. A venv that has not been re-synced since the v0.22.0 bump will say
+`0.15.0` while running v0.22.0. That matters beyond cosmetics: the run manifest
+records package versions from this metadata, so an un-synced venv writes the
+wrong Harbor version into the provenance of a paid run. Re-sync before citing a
+result:
+
+```bash
+uv sync --frozen --extra dev
+git -C reference/seagym/reference/harbor describe --tags   # the truth
+```
+
 ### Inspect before you run
 
 `seagym inspect` has four subcommands and none of them execute a rollout, so
@@ -405,6 +447,50 @@ job here. Dropping to one gate task takes 7 rollouts to 5. Raising
 `n_concurrent` is the tempting third option and the one to avoid: tasks declare
 8 CPUs and 16 GB against a smaller ceiling, so parallelism buys another silent
 OOM zero.
+
+#### Pre-pull the base images before a paid run
+
+Every image a run needs is pulled on demand, during the run. That is fine until
+the pull fails partway through — a gated AlgoTune canary here lost 4 of its 5
+task runs to a transient Docker credential-helper failure:
+
+```text
+#3 [internal] load metadata for docker.io/library/python:3.12-slim
+#3 ERROR: error getting credentials - err: exit status 1
+failed to solve: error getting credentials
+```
+
+Nothing was wrong with the code. The first rollout, which had already built its
+image, scored 1.0; everything after it died at the `FROM` line. Pulling the
+bases first turns that class of failure into a fast, free error before any
+tokens are spent.
+
+The image surface is small. **Both** the 154 AlgoTune tasks and the five
+checked-in `holoskill-codeopt-v1` tasks build from the same base:
+
+```bash
+docker pull python:3.12-slim      # all 154 AlgoTune + all 5 checked-in tasks
+
+# Only needed when a task phase uses network_mode = "allowlist", which builds
+# Harbor's egress-control sidecar. The checked-in codeopt tasks do; AlgoTune
+# tasks declare no per-phase policy and so do not.
+docker pull gogost/gost:3.2.7-nightly.20260602
+
+docker images | grep -E "python:3.12-slim|harbor-prebuilt"   # confirm
+```
+
+The sidecar is *built*, not pulled — it appears locally as
+`harbor-prebuilt:harbor-docker-egress-control-sidecar--<hash>` and is
+content-addressed, so a rebuilt image cannot go stale. Only its `gogost/gost`
+base comes off the network.
+
+The Codex agent itself is **not** a Docker pull. Harbor installs the CLI inside
+each container over nvm/npm, which is why `agent_setup` costs ~3.3 min per
+rollout and why a run can still fail on a network hiccup even with every image
+cached — one job here died on
+`fatal: unable to access 'https://github.com/nvm-sh/nvm.git/': GnuTLS, handshake
+failed`. Pre-pulling does not protect against that; baking the CLI into the task
+image would.
 
 #### Check the memory ceiling before running a registry task
 

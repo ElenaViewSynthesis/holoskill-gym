@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Launch a SEAGym gated canary with the environment Harbor actually needs.
+#
+#   scripts/run-gated-canary examples/holo_skillopt_algotune/config.json
+#   scripts/run-gated-canary <config> --venv .venv        # override the venv
+#   scripts/run-gated-canary <config> --skip-pull         # images already warm
+#
+# Two things this exists for, both learned the hard way:
+#
+#   1. SEAGym spawns Harbor by bare name -- envs/harbor_env/env.py defaults
+#      harbor_bin to "harbor" -- so the venv's bin must be on PATH. Every
+#      manual run used an explicit path and never exercised name resolution,
+#      so the first gated run died on FileNotFoundError: 'harbor'.
+#   2. Base images are otherwise pulled mid-run. A credential-helper failure
+#      partway through cost one canary 4 of its 5 task runs, after the first
+#      had already spent tokens. Pulling first fails fast and free.
+#
+# Paths are derived from this script's location, so it is portable.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV=".venv-linux"
+SKIP_PULL=0
+CONFIG=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --venv)      VENV="$2"; shift 2 ;;
+        --skip-pull) SKIP_PULL=1; shift ;;
+        -h|--help)   sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        *)           CONFIG="$1"; shift ;;
+    esac
+done
+
+if [ -z "$CONFIG" ]; then
+    echo "usage: scripts/run-gated-canary <config.json> [--venv DIR] [--skip-pull]" >&2
+    exit 64
+fi
+
+cd "$REPO_ROOT"
+
+if [ ! -f "$CONFIG" ]; then
+    echo "config not found: $CONFIG" >&2
+    exit 66
+fi
+if [ ! -x "$VENV/bin/seagym" ]; then
+    echo "no seagym in $VENV/bin -- pass --venv with the right one" >&2
+    exit 69
+fi
+
+export PATH="$REPO_ROOT/$VENV/bin:$PATH"
+export UV_LINK_MODE="${UV_LINK_MODE:-copy}"
+
+command -v harbor >/dev/null || { echo "harbor still not on PATH" >&2; exit 69; }
+echo "harbor : $(command -v harbor) $(harbor --version 2>/dev/null || echo '?')"
+echo "config : $CONFIG"
+
+if [ "$SKIP_PULL" -eq 0 ]; then
+    echo "pulling base images so a mid-run pull cannot strand a paid rollout..."
+    docker pull --quiet python:3.12-slim
+fi
+
+# Credentials are checked without spending anything; --check-only never calls a
+# model. Failing here costs nothing, whereas failing later costs a rollout.
+python -m holoskill_gym.preflight --check-only --condition codex-gated >/dev/null || {
+    echo "preflight failed -- run it directly to see which check" >&2
+    exit 70
+}
+echo "preflight: ok"
+
+echo "launched $(date -Is)"
+seagym train "$CONFIG"
+echo "finished $(date -Is)"
