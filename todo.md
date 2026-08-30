@@ -395,6 +395,49 @@ credentialed API call has been made.
       the ordinary unit-test job credential-free and able to run without a
       daemon.
 
+**Registry authentication is currently removed, deliberately.** Every image
+this project pulls is public — `python:3.12-slim` for all 154 AlgoTune and all
+five checked-in task packages, and `gogost/gost` for Harbor's egress sidecar —
+so `~/.docker/config.json` carries no `credsStore`. That line caused two
+canary-breaking failures, neither of which needed a credential: the helper
+exited 1 mid-run (`error getting credentials`, losing 4 of 5 rollouts), and
+after a token rotation it presented a revoked credential
+(`authentication required`) on an anonymous pull of a public image.
+
+- [ ] **Only re-enable a registry login when a private image is actually
+      required** — a task base image hosted privately, or a pre-baked agent
+      image (see the Codex CLI note in §E). Until then, anonymous pulls are
+      both sufficient and strictly more reliable.
+- [ ] If a private registry does become necessary, mint a **scoped** Personal
+      Access Token (read-only where the registry supports it), store it outside
+      the repository, and log in non-interactively so the token never reaches
+      shell history or a transcript:
+
+      ```bash
+      # token supplied on stdin, never as an argv value
+      printf '%s' "$DOCKER_PAT" | docker login -u <username> --password-stdin
+
+      # restore the credential helper only if you want it persisted
+      #   ~/.docker/config.json  ->  {"auths": {...}, "credsStore": "desktop.exe"}
+
+      docker logout                 # revert to anonymous
+      docker logout <registry-host> # per-registry
+      ```
+
+- [ ] Never read a credential back for diagnosis. `docker-credential-<store>
+      get` prints the secret value to stdout; `list` returns only server URLs
+      and usernames and is sufficient to answer whether a login exists. This
+      is recorded because the `get` form was run once during debugging and
+      exposed a live token, which then had to be rotated.
+- [ ] Add `DOCKER_PAT` to the ignored root `.env` rather than a shell profile
+      if a login becomes routine, so it follows the same loading contract as
+      every other credential in §C and is covered by `scripts/scan-artifacts`.
+- [ ] Extend the artifact scanner before storing any registry token: the
+      current `_REDACTIONS` patterns match `secret\s*[:=]` and miss the JSON
+      form `"Secret":"dckr_pat_…"`, because the closing quote sits between key
+      and colon. Add a `dckr_pat_` literal pattern and make the key patterns
+      quote-tolerant.
+
 **Docker exit criterion:** every checked-in Harbor task passes with the oracle
 agent at concurrency one, failure-path containers are removed, and no provider
 credential was present in a container or artifact.
